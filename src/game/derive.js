@@ -10,7 +10,18 @@ import {
   ROSTER,
   TEMPLATES,
 } from '../data/league.js';
-import { currentKicker, initials, obpString, ordinal, rateString, statLine } from './logic.js';
+import {
+  awayPid,
+  currentKicker,
+  homePid,
+  initials,
+  obpString,
+  ordinal,
+  playerById,
+  playerName,
+  rateString,
+  statLine,
+} from './logic.js';
 import { C } from '../theme.js';
 
 const TONES = {
@@ -137,15 +148,19 @@ function deriveOnDeck(s) {
   return [1, 2].map((d) => {
     let name;
     let c;
+    let pid;
     if (s.half === 'bot') {
-      const p = ROSTER[s.lineup[(s.kiHome + d) % s.lineup.length]];
+      const p = playerById(s.lineup[(s.kiHome + d) % s.lineup.length]);
       name = p.name;
       c = p.c;
+      pid = homePid(p.id);
     } else {
-      name = AWAY_NAMES[(s.kiAway + d) % AWAY_NAMES.length];
+      const slot = (s.kiAway + d) % AWAY_NAMES.length;
+      name = AWAY_NAMES[slot];
       c = C.muted;
+      pid = awayPid(slot);
     }
-    const g = statLine(s.gameStats, name);
+    const g = statLine(s.gameStats, pid);
     return {
       name,
       ini: initials(name),
@@ -166,7 +181,8 @@ function deriveBook(s, posOf) {
 
   const flat = [];
   s.lineup.forEach((id, idx) => {
-    const p = ROSTER[id];
+    const p = playerById(id);
+    const pid = homePid(p.id);
     const [first, last] = p.name.split(' ');
     flat.push({
       isName: true,
@@ -176,7 +192,7 @@ function deriveBook(s, posOf) {
       sub: posOf(p),
     });
     cols.forEach((col) => {
-      const pa = s.events.filter((e) => e.name === p.name && e.inning === col.n && e.half === 'bot');
+      const pa = s.events.filter((e) => e.pid === pid && e.inning === col.n && e.half === 'bot');
       const ev = pa[pa.length - 1];
       flat.push({
         isName: false,
@@ -240,7 +256,7 @@ export function deriveView(s, actions) {
   const kicker = s.gameActive
     ? currentKicker(s)
     : { name: '—', c: C.muted, ini: '·', line: '', slot: 1, of: 7 };
-  const kickerGame = statLine(s.gameStats, kicker.name);
+  const kickerGame = statLine(s.gameStats, kicker.pid);
 
   const standings = deriveStandings(s, actions);
   const me = standings.find((t) => t.you);
@@ -248,10 +264,11 @@ export function deriveView(s, actions) {
 
   // ---- Lineup / bench ------------------------------------------------------
   const lineupView = s.lineup.map((id, idx) => {
-    const p = ROSTER[id];
-    const g = s.gameStats[p.name];
+    const p = playerById(id);
+    const g = s.gameStats[homePid(p.id)];
     const upNow = s.gameActive && s.half === 'bot' && idx === s.kiHome % s.lineup.length;
     return {
+      key: homePid(p.id),
       slot: idx + 1,
       name: p.name,
       ini: initials(p.name),
@@ -269,23 +286,32 @@ export function deriveView(s, actions) {
   });
 
   const benchView = s.bench.map((id) => {
-    const p = ROSTER[id];
-    return { name: p.name, ini: initials(p.name), c: p.c, add: actions.addFromBench(id) };
+    const p = playerById(id);
+    return { key: homePid(p.id), name: p.name, ini: initials(p.name), c: p.c, add: actions.addFromBench(id) };
   });
 
   // ---- Live stats table ----------------------------------------------------
   const statsHome = s.statsTeam === 'home';
   const statRoster = statsHome
-    ? s.lineup.map((id, idx) => ({
-        name: ROSTER[id].name,
-        up: s.half === 'bot' && idx === s.kiHome % s.lineup.length,
-      }))
-    : AWAY_NAMES.map((n, idx) => ({ name: n, up: s.half === 'top' && idx === s.kiAway % AWAY_NAMES.length }));
+    ? s.lineup.map((id, idx) => {
+        const p = playerById(id);
+        return {
+          pid: homePid(p.id),
+          name: p.name,
+          up: s.half === 'bot' && idx === s.kiHome % s.lineup.length,
+        };
+      })
+    : AWAY_NAMES.map((n, idx) => ({
+        pid: awayPid(idx),
+        name: n,
+        up: s.half === 'top' && idx === s.kiAway % AWAY_NAMES.length,
+      }));
 
   const liveStatRows = statRoster.map((row) => {
-    const g = statLine(s.gameStats, row.name);
+    const g = statLine(s.gameStats, row.pid);
     const isUp = row.up && s.gameActive;
     return {
+      key: row.pid,
       name: row.name,
       upTag: isUp ? '●' : '',
       ab: g.ab,
@@ -299,8 +325,8 @@ export function deriveView(s, actions) {
 
   const book = deriveBook(s, posOf);
   const onDeck = deriveOnDeck(s);
-  const prof = ROSTER[s.playerId] || ROSTER[0];
-  const posMenuPlayer = s.posMenu != null ? ROSTER[s.posMenu] : null;
+  const prof = playerById(s.playerId) || ROSTER[0];
+  const posMenuPlayer = s.posMenu != null ? playerById(s.posMenu) : null;
   const quickMode = s.gameActive && s.trackMode === 'ours' && s.half === 'top';
   const sel = s.selRunner;
 
@@ -339,16 +365,16 @@ export function deriveView(s, actions) {
       {
         name: 'Priya Shah',
         team: 'GS',
-        val: 16 + (s.gameFinal ? statLine(s.gameStats, 'Priya Shah').r : 0),
+        val: 16 + (s.gameFinal ? statLine(s.gameStats, homePid(2)).r : 0),
         c: C.coral,
-        pid: 2,
+        rosterId: 2,
       },
-      { name: 'Maya Ortiz', team: 'GS', val: 14, c: C.teal, pid: 0 },
-      { name: 'R. Chen', team: 'RC', val: 13, c: C.muted, pid: -1 },
+      { name: 'Maya Ortiz', team: 'GS', val: 14, c: C.teal, rosterId: 0 },
+      { name: 'R. Chen', team: 'RC', val: 13, c: C.muted, rosterId: -1 },
     ].map((p) => ({
       ...p,
       ini: initials(p.name),
-      onTap: p.pid >= 0 ? actions.openPlayer(p.pid, 'league') : actions.noop,
+      onTap: p.rosterId >= 0 ? actions.openPlayer(p.rosterId, 'league') : actions.noop,
     })),
 
     // ---- Team --------------------------------------------------------------
@@ -432,7 +458,7 @@ export function deriveView(s, actions) {
         : 'First plate appearance today',
     onDeck,
     hasSel: sel != null && !!s.bases[sel],
-    selName: sel != null ? s.bases[sel] : '',
+    selName: playerName(s.bases[sel]),
     selBase: sel != null ? BASE_LABELS[sel] : '',
     selBackOp: sel != null && sel > 0 && !s.bases[sel - 1] ? 1 : 0.35,
     hasLast: !!s.lastPlay,

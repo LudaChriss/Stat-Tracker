@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_STATE } from '../data/league.js';
+import { loadState, saveState } from './storage.js';
 import {
   applyMoveLineup,
   applyOutcome,
@@ -16,7 +17,8 @@ const SYNC_MS = 3200;
  * function so the scoring engine stays testable and free of React.
  */
 export function useGame() {
-  const [state, setState] = useState(INITIAL_STATE);
+  // Resume a saved season if there is one; otherwise start fresh.
+  const [state, setState] = useState(() => loadState(INITIAL_STATE));
 
   // Actions are memoised once, so the few that need to *read* current state
   // outside of an updater (to fire a toast, say) go through this ref.
@@ -34,6 +36,11 @@ export function useGame() {
     },
     [],
   );
+
+  // Persist whenever the durable slice of state changes.
+  useEffect(() => {
+    saveState(state);
+  }, [state]);
 
   const patch = useCallback((p) => setState((s) => ({ ...s, ...p })), []);
 

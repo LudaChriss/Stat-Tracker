@@ -74,7 +74,7 @@ export default function StatsTab({ v, actions }) {
             </div>
             {v.liveStatRows.map((r) => (
               <div
-                key={r.name}
+                key={r.key}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: GRID,

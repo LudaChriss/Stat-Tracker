@@ -32,7 +32,7 @@ export default function LineupTab({ v }) {
       <DarkCard style={{ padding: '4px 0' }}>
         {v.lineupView.map((p) => (
           <div
-            key={p.name}
+            key={p.key}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -127,7 +127,7 @@ export default function LineupTab({ v }) {
           <DarkCard style={{ padding: '4px 0' }}>
             {v.benchView.map((p) => (
               <div
-                key={p.name}
+                key={p.key}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

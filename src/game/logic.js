@@ -2,12 +2,41 @@
 // next state, so the React layer never has to reason about mutation order and
 // the undo stack can just hold snapshots.
 
-import { ROSTER, AWAY_NAMES, AWAY_TEAM } from '../data/league.js';
+import { AWAY_NAMES, AWAY_TEAM, ROSTER } from '../data/league.js';
 
 const BASE_NAMES = ['1st', '2nd', '3rd'];
 const UNDO_DEPTH = 25;
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
+
+// ---------------------------------------------------------------------------
+// Player identity
+//
+// Stats, base runners and scorebook entries are all keyed by a player id, not
+// by name — two players sharing a name must not share a stat line. Ids are
+// namespaced because the opposition has no roster entry: "h7" is roster id 7,
+// "a3" is the 4th slot in the opponent's order.
+// ---------------------------------------------------------------------------
+
+const BY_ID = new Map(ROSTER.map((p) => [p.id, p]));
+
+/** Look a rostered player up by id. Ids are authoritative, not array order. */
+export const playerById = (id) => BY_ID.get(id);
+
+export const homePid = (rosterId) => `h${rosterId}`;
+export const awayPid = (slot) => `a${slot}`;
+export const isHomePid = (pid) => typeof pid === 'string' && pid[0] === 'h';
+
+/** Display name for a player id, for detail lines and the runner controls. */
+export function playerName(pid) {
+  if (!pid) return '';
+  const n = Number(pid.slice(1));
+  if (isHomePid(pid)) {
+    const p = playerById(n);
+    return p ? p.name : '—';
+  }
+  return AWAY_NAMES[n] ?? '—';
+}
 
 export const initials = (n) =>
   n.split(' ').map((w) => w[0]).join('').replace('.', '').slice(0, 2).toUpperCase();
@@ -37,11 +66,13 @@ function snapshot(s) {
 
 const pushUndo = (s) => [...s.undoStack, snapshot(s)].slice(-UNDO_DEPTH);
 
+/** Whoever is at the plate, with the id the stat map is keyed by. */
 export function currentKicker(s) {
   if (s.half === 'bot') {
-    const p = ROSTER[s.lineup[s.kiHome % s.lineup.length]];
+    const p = playerById(s.lineup[s.kiHome % s.lineup.length]);
     return {
       ...p,
+      pid: homePid(p.id),
       ini: initials(p.name),
       line: `${p.avg} AVG · ${p.obp} OBP · ${p.ops} OPS`,
       slot: (s.kiHome % s.lineup.length) + 1,
@@ -50,19 +81,38 @@ export function currentKicker(s) {
   }
   const i = s.kiAway % AWAY_NAMES.length;
   const name = AWAY_NAMES[i];
-  return { name, c: '#5A7A90', ini: initials(name), line: AWAY_TEAM, slot: i + 1, of: AWAY_NAMES.length };
+  return {
+    pid: awayPid(i),
+    name,
+    c: '#5A7A90',
+    ini: initials(name),
+    line: AWAY_TEAM,
+    slot: i + 1,
+    of: AWAY_NAMES.length,
+  };
 }
 
 const EMPTY_LINE = { ab: 0, h: 0, r: 0, rbi: 0, bb: 0 };
 
-export function statLine(gameStats, name) {
-  return gameStats[name] || EMPTY_LINE;
+/** Read a player's line for this game. Returns zeroes if they haven't batted. */
+export function statLine(gameStats, pid) {
+  return gameStats[pid] || EMPTY_LINE;
 }
 
 // Fetch-or-create a mutable stat line inside a cloned gameStats map.
-function lineFor(obj, name) {
-  if (!obj[name]) obj[name] = { ...EMPTY_LINE };
-  return obj[name];
+function lineFor(obj, pid) {
+  if (!obj[pid]) obj[pid] = { ...EMPTY_LINE };
+  return obj[pid];
+}
+
+// Mark a scorer's most recent scorebook cell as having come around.
+function markScored(events, pid) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].pid === pid) {
+      events[i].scored = true;
+      return;
+    }
+  }
 }
 
 // Shared "3 outs ends the half" tail. Returns the patch with inning/half rolled
@@ -102,7 +152,7 @@ export function applyOutcome(s, o) {
   const gameStats = clone(s.gameStats);
   const events = clone(s.events);
   const kicker = currentKicker(s);
-  const me = lineFor(gameStats, kicker.name);
+  const me = lineFor(gameStats, kicker.pid);
   const scorers = [];
   let detail = '';
 
@@ -125,10 +175,10 @@ export function applyOutcome(s, o) {
 
     if (o.n >= 4) {
       runs++;
-      scorers.push(kicker.name);
+      scorers.push(kicker.pid);
       detail = `${kicker.name} scores`;
     } else {
-      bases[o.n - 1] = kicker.name;
+      bases[o.n - 1] = kicker.pid;
       detail = `${kicker.name} to ${BASE_NAMES[o.n - 1]}`;
     }
     if (runs) detail += ` · ${runs}${runs > 1 ? ' runs score' : ' run scores'}`;
@@ -147,19 +197,19 @@ export function applyOutcome(s, o) {
       }
       bases[1] = bases[0];
     }
-    bases[0] = kicker.name;
+    bases[0] = kicker.pid;
     detail = `${kicker.name} to 1st${runs ? ' · run forced in' : ''}`;
   } else {
     me.ab++;
     outs++;
     if (o.mode === 'force' && bases[0]) {
-      detail = `${bases[0]} forced at 2nd, ${kicker.name} safe at 1st`;
-      bases[0] = kicker.name;
+      detail = `${playerName(bases[0])} forced at 2nd, ${kicker.name} safe at 1st`;
+      bases[0] = kicker.pid;
     } else if (o.mode === 'sac' && bases[2] && outs < 3) {
       runs++;
       scorers.push(bases[2]);
       me.rbi++;
-      detail = `${kicker.name} out · ${bases[2]} scores`;
+      detail = `${kicker.name} out · ${playerName(bases[2])} scores`;
       bases[2] = null;
     } else {
       detail = `${kicker.name} out`;
@@ -169,7 +219,7 @@ export function applyOutcome(s, o) {
   // The opponent only gets scorebook entries when we're tracking both teams.
   if (s.half === 'bot' || s.trackMode === 'both') {
     events.push({
-      name: kicker.name,
+      pid: kicker.pid,
       inning: s.inning,
       half: s.half,
       sym: o.k,
@@ -177,15 +227,9 @@ export function applyOutcome(s, o) {
     });
   }
 
-  // Credit the run, and mark that player's most recent scorebook cell as scored.
-  scorers.forEach((n) => {
-    lineFor(gameStats, n).r++;
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].name === n) {
-        events[i].scored = true;
-        break;
-      }
-    }
+  scorers.forEach((pid) => {
+    lineFor(gameStats, pid).r++;
+    markScored(events, pid);
   });
 
   const score = { ...s.score };
@@ -260,14 +304,15 @@ export function applyRunnerAction(s, adv) {
   const bases = [...s.bases];
   let outs = s.outs;
   const score = { ...s.score };
-  const name = bases[i];
+  const pid = bases[i];
+  const name = playerName(pid);
   const gameStats = clone(s.gameStats);
   const events = clone(s.events);
   let detail;
 
   if (adv === 'back') {
     if (i === 0 || bases[i - 1]) return s;
-    bases[i - 1] = name;
+    bases[i - 1] = pid;
     bases[i] = null;
     return {
       ...s,
@@ -283,16 +328,11 @@ export function applyRunnerAction(s, adv) {
     if (target >= 3) {
       if (s.half === 'top') score.away++;
       else score.home++;
-      lineFor(gameStats, name).r++;
-      for (let j = events.length - 1; j >= 0; j--) {
-        if (events[j].name === name) {
-          events[j].scored = true;
-          break;
-        }
-      }
+      lineFor(gameStats, pid).r++;
+      markScored(events, pid);
       detail = `${name} scores`;
     } else {
-      bases[target] = name;
+      bases[target] = pid;
       detail = `${name} to ${BASE_NAMES[target]}`;
     }
     bases[i] = null;
