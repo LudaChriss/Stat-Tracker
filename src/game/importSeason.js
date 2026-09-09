@@ -69,6 +69,7 @@ export function parseSeasonFile(text) {
       name: String((src.myTeam && src.myTeam.name) || ''),
       priorW: Number(src.myTeam && src.myTeam.priorW) || 0,
       priorL: Number(src.myTeam && src.myTeam.priorL) || 0,
+      priorT: Number(src.myTeam && src.myTeam.priorT) || 0,
     },
     roster,
     teams,

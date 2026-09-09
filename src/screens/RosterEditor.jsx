@@ -4,6 +4,7 @@ import { Avatar, Card, RoundButton, Section } from '../components/ui.jsx';
 import { PlayerFormSheet } from '../components/FormSheet.jsx';
 import { NameSheet, ResetConfirmSheet } from '../components/ResetSheets.jsx';
 import ImportSheet from '../components/ImportSheet.jsx';
+import RecordSheet from '../components/RecordSheet.jsx';
 
 /** Manage our own roster. Season stats come from played games, so removing a
  *  player here never rewrites the games they already appear in. */
@@ -131,7 +132,68 @@ export default function RosterEditor({ v, actions }) {
         </Card>
       </div>
 
-      <div style={{ padding: '0 16px 28px' }}>
+      <div style={{ padding: '0 16px 8px' }}>
+        <Section>Season record</Section>
+        <Card style={{ padding: '12px 14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: C.muted }}>
+              From {v.trackedGames} tracked {v.trackedGames === 1 ? 'game' : 'games'}
+            </span>
+            <span style={{ fontSize: 15, fontWeight: 800, ...tnum }}>{v.trackedRecord}</span>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: 8,
+              paddingTop: 8,
+              borderTop: `1px solid ${C.hair}`,
+            }}
+          >
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: C.muted }}>
+              Entered manually
+            </span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: v.hasManualRecord ? '#8A6100' : C.fog, ...tnum }}>
+              {v.manualRecord}
+            </span>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: 8,
+              paddingTop: 8,
+              borderTop: `1.5px solid ${C.line}`,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 800 }}>Total</span>
+            <span style={{ fontSize: 17, fontWeight: 800, color: C.header, ...tnum }}>
+              {v.totalRecord}
+            </span>
+          </div>
+          <button
+            onClick={actions.openRecordEditor}
+            style={{
+              width: '100%',
+              marginTop: 12,
+              background: '#fff',
+              border: `1.5px solid ${C.stroke}`,
+              color: C.header,
+              borderRadius: 12,
+              minHeight: 46,
+              fontSize: 13.5,
+              fontWeight: 800,
+              ...btn,
+            }}
+          >
+            Adjust for untracked games
+          </button>
+        </Card>
+      </div>
+
+      <div style={{ padding: '8px 16px 28px' }}>
         <Section>Season data</Section>
         <button
           onClick={actions.exportSeason}
@@ -274,6 +336,7 @@ export default function RosterEditor({ v, actions }) {
         </button>
       </div>
 
+      {v.recordEditor && <RecordSheet v={v} actions={actions} />}
       {v.importPreview && <ImportSheet v={v} actions={actions} />}
       {v.resetFlow === 'confirm' && <ResetConfirmSheet v={v} actions={actions} />}
       {v.resetFlow === 'name' && (

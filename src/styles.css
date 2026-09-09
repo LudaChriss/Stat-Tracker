@@ -41,6 +41,21 @@ a:hover { color: #FF6B4A; }
   padding: 0;
   background: #0B2A42;
   place-items: stretch;
+  /* Exactly the viewport, not "at least" it: the shell must be a fixed height
+     for the panes inside it to scroll rather than growing the page. */
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * A flex child defaults to min-height:auto, which means it refuses to shrink
+ * below its content — so an `overflow: auto` pane grows the whole shell
+ * instead of scrolling. Every direct child needs to be allowed to shrink.
+ */
+.app-shell,
+.app-shell > * {
+  min-height: 0;
 }
 
 /*

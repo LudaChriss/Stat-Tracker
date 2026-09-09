@@ -84,7 +84,7 @@ export const INITIAL_STATE = {
   screen: 'league',
   sport: 'kickball',
   // Ships empty. An unnamed team triggers first-run setup.
-  myTeam: { name: '', priorW: 0, priorL: 0 },
+  myTeam: { name: '', priorW: 0, priorL: 0, priorT: 0 },
   roster: [],
   teams: [],
   opponentId: null,
@@ -114,6 +114,7 @@ export const INITIAL_STATE = {
   teamEditor: null,
   editTeamId: null,
   resetFlow: null,
+  recordEditor: false,
   importPreview: null,
   importError: null,
   viewGameId: null,

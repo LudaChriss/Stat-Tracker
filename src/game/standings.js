@@ -18,9 +18,12 @@ export function tallyStandings(s) {
     {
       id: MY_ID,
       name: s.myTeam.name,
+      // Manually entered games for our team: games that were played but never
+      // scored in the app. They are an offset, not history, so they carry no
+      // box score and appear nowhere in the game list.
       w: s.myTeam.priorW || 0,
       l: s.myTeam.priorL || 0,
-      t: 0,
+      t: s.myTeam.priorT || 0,
       you: true,
     },
     ...s.teams.map((team) => ({

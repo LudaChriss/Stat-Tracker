@@ -25,7 +25,7 @@ export default function LineupTab({ v, actions }) {
         }}
       >
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', color: C.muted }}>
-          KICKING ORDER · TAP ▲▼
+          KICKING ORDER · TAP A NAME TO EDIT
         </div>
         <div style={{ fontSize: 11, fontWeight: 800, color: C.cyan }}>{v.lineupCount} IN LINEUP</div>
       </div>
@@ -46,8 +46,8 @@ export default function LineupTab({ v, actions }) {
             <span style={{ width: 20, fontSize: 12, fontWeight: 800, color: C.cyan, ...tnum }}>
               {p.slot}
             </span>
-            <Avatar ini={p.ini} c={p.c} size={32} fs={12} onClick={p.goEntry} style={{ cursor: 'pointer' }} />
-            <span onClick={p.goEntry} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+            <Avatar ini={p.ini} c={p.c} size={32} fs={12} onClick={p.openPos} style={{ cursor: 'pointer' }} />
+            <span onClick={p.openPos} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                 {/* The name gets its own clipping context so the badge beside
                     it is never the thing that gets cut off. */}

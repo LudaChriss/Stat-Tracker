@@ -55,6 +55,9 @@ export default function TeamPage({ v, actions }) {
         <div style={{ fontSize: 13, fontWeight: 600, color: C.ice, marginTop: 2, ...tnum }}>
           {v.teamRecord}
         </div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.frost, marginTop: 2 }}>
+          {v.recordBreakdown}
+        </div>
         <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
           {v.teamAgg.map((a) => (
             <div key={a.k}>

@@ -91,7 +91,13 @@ export function RoundButton({ children, onClick, style }) {
   );
 }
 
-/** Bottom sheet with a scrim. Clicking the scrim closes it. */
+/**
+ * Bottom sheet with a scrim. Clicking the scrim closes it.
+ *
+ * The content scrolls inside the sheet: a tall sheet — the player sheet with
+ * ten fielding positions, say — would otherwise push its last controls off the
+ * bottom of a small screen, where they cannot be reached at all.
+ */
 export function Sheet({ onClose, children, zIndex = 40, sheetStyle }) {
   return (
     <div
@@ -110,6 +116,10 @@ export function Sheet({ onClose, children, zIndex = 40, sheetStyle }) {
         style={{
           borderRadius: '22px 22px 0 0',
           width: '100%',
+          maxHeight: 'calc(100% - 16px)',
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
           animation: 'popIn .2s ease-out',
           ...sheetStyle,
         }}

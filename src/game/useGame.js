@@ -282,11 +282,16 @@ export function useGame() {
 
       // Move a player between the batting order and the bench.
       benchPlayer: (id) => () =>
-        setState((s) => ({
-          ...s,
-          lineup: s.lineup.filter((x) => x !== id),
-          bench: s.bench.includes(id) ? s.bench : [...s.bench, id],
-        })),
+        setState((s) => {
+          // Never empty the order completely — there would be nobody to bat.
+          if (s.lineup.length <= 1 || !s.lineup.includes(id)) return { ...s, posMenu: null };
+          return {
+            ...s,
+            lineup: s.lineup.filter((x) => x !== id),
+            bench: s.bench.includes(id) ? s.bench : [...s.bench, id],
+            posMenu: null,
+          };
+        }),
 
       openTeamEditor: (id) => () => patch({ teamEditor: { id } }),
       closeTeamEditor: () => patch({ teamEditor: null }),
@@ -390,6 +395,21 @@ export function useGame() {
 
       openReset: () => patch({ resetFlow: 'confirm' }),
       openRename: () => patch({ resetFlow: 'rename' }),
+      openRecordEditor: () => patch({ recordEditor: true }),
+      closeRecordEditor: () => patch({ recordEditor: false }),
+
+      /** Manual W/L/T offset for games that were played but never scored here. */
+      setManualRecord: ({ priorW, priorL, priorT }) =>
+        setState((s) => ({
+          ...s,
+          myTeam: {
+            ...s.myTeam,
+            priorW: Math.max(0, Number(priorW) || 0),
+            priorL: Math.max(0, Number(priorL) || 0),
+            priorT: Math.max(0, Number(priorT) || 0),
+          },
+          recordEditor: false,
+        })),
       closeReset: () => patch({ resetFlow: null }),
       confirmReset: () => patch({ resetFlow: 'name' }),
 

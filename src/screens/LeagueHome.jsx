@@ -178,6 +178,12 @@ export default function LeagueHome({ v, actions }) {
             </div>
           ))}
         </Card>
+        {v.hasManualRecord && (
+          <div style={{ fontSize: 11, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+            Includes {v.manualGames} {v.manualGames === 1 ? 'game' : 'games'} entered
+            manually, with no box score.
+          </div>
+        )}
       </div>
 
       {/* Stat leaders */}

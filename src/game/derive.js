@@ -321,6 +321,22 @@ export function deriveView(s, actions) {
 
   const standings = deriveStandings(s, actions);
   const me = standings.find((t) => t.you);
+
+  // Keep the two halves of the record separable: games actually scored in the
+  // app, versus a manual offset for games that were not.
+  const tracked = s.history.reduce(
+    (acc, g) => ({ ...acc, [g.result === 'W' ? 'w' : g.result === 'L' ? 'l' : 't']:
+      acc[g.result === 'W' ? 'w' : g.result === 'L' ? 'l' : 't'] + 1 }),
+    { w: 0, l: 0, t: 0 },
+  );
+  const manual = {
+    w: s.myTeam.priorW || 0,
+    l: s.myTeam.priorL || 0,
+    t: s.myTeam.priorT || 0,
+  };
+  const asRecord = (r) => `${r.w}–${r.l}${r.t ? `–${r.t}` : ''}`;
+  const manualGames = manual.w + manual.l + manual.t;
+  const trackedGames = tracked.w + tracked.l + tracked.t;
   const set = STAT_SETS[s.statSet];
 
   // ---- Lineup / bench ------------------------------------------------------
@@ -531,7 +547,21 @@ export function deriveView(s, actions) {
       })),
 
     // ---- Team --------------------------------------------------------------
-    teamRecord: `${me.w}–${me.l} · ${RANK_LABELS[me.rank - 1]} in league`,
+    teamRecord: `${asRecord(me)} · ${RANK_LABELS[me.rank - 1] || `${me.rank}th`} in league`,
+    // Shown under the record so it is never a mystery where the numbers came from.
+    recordBreakdown: manualGames
+      ? `${asRecord(tracked)} from ${trackedGames} tracked ${trackedGames === 1 ? 'game' : 'games'} · ${asRecord(manual)} entered manually`
+      : `${trackedGames} tracked ${trackedGames === 1 ? 'game' : 'games'}`,
+    hasManualRecord: manualGames > 0,
+    trackedRecord: asRecord(tracked),
+    trackedGames,
+    manualRecord: asRecord(manual),
+    manualGames,
+    manualW: manual.w,
+    manualL: manual.l,
+    manualT: manual.t,
+    totalRecord: asRecord(me),
+    recordEditor: s.recordEditor,
     teamAgg: (() => {
       const t = teamSeason(s.history);
       return [
@@ -639,6 +669,21 @@ export function deriveView(s, actions) {
     hasBench: s.bench.length > 0,
     posMenuOpen: s.posMenu != null,
     posMenuName: posMenuPlayer ? posMenuPlayer.name : '',
+    // The position sheet doubles as the player sheet for a batting-order slot,
+    // so removing someone costs no width in an already dense row.
+    posMenuSlot: (() => {
+      const i = s.lineup.indexOf(s.posMenu);
+      return i >= 0 ? `Batting ${i + 1} of ${s.lineup.length}` : 'On the bench';
+    })(),
+    posMenuInLineup: s.lineup.includes(s.posMenu),
+    posMenuCanBench: s.lineup.length > 1,
+    posMenuBench: actions.benchPlayer(s.posMenu),
+    posMenuIsUp:
+      s.gameActive &&
+      s.half === 'bot' &&
+      s.lineup.length > 0 &&
+      s.lineup.indexOf(s.posMenu) === s.kiHome % s.lineup.length,
+    posMenuGoEntry: actions.setLiveTab('entry'),
     posOptions: POSITIONS.map((pos) => {
       const cur = posMenuPlayer && posOf(posMenuPlayer) === pos;
       return {

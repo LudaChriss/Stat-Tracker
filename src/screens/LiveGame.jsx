@@ -189,15 +189,47 @@ export default function LiveGame({ v, actions }) {
           zIndex={45}
           sheetStyle={{ background: C.panel, padding: '18px 16px 30px' }}
         >
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>
-            Position — {v.posMenuName}
+          <div style={{ fontSize: 17, fontWeight: 800, color: '#fff' }}>{v.posMenuName}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.mist, marginTop: 2 }}>
+            {v.posMenuSlot}
+          </div>
+
+          {v.posMenuIsUp && (
+            <button
+              onClick={v.posMenuGoEntry}
+              style={{
+                width: '100%',
+                marginTop: 12,
+                background: C.teal,
+                border: 'none',
+                color: '#fff',
+                borderRadius: 12,
+                minHeight: 46,
+                fontSize: 14,
+                fontWeight: 800,
+                ...btn,
+              }}
+            >
+              Score this at-bat ›
+            </button>
+          )}
+
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: '.08em',
+              color: C.muted,
+              margin: '16px 0 8px',
+            }}
+          >
+            FIELDING POSITION
           </div>
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3,1fr)',
               gap: 8,
-              marginTop: 12,
             }}
           >
             {v.posOptions.map((o) => (
@@ -219,6 +251,53 @@ export default function LiveGame({ v, actions }) {
               </button>
             ))}
           </div>
+
+          {v.posMenuInLineup && (
+            <>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: '.08em',
+                  color: C.muted,
+                  margin: '18px 0 8px',
+                }}
+              >
+                BATTING ORDER
+              </div>
+              <button
+                onClick={v.posMenuBench}
+                disabled={!v.posMenuCanBench}
+                style={{
+                  width: '100%',
+                  background: 'none',
+                  border: '1.5px solid rgba(255,255,255,.25)',
+                  color: '#FFB4A0',
+                  borderRadius: 12,
+                  minHeight: 48,
+                  fontSize: 14,
+                  fontWeight: 800,
+                  opacity: v.posMenuCanBench ? 1 : 0.4,
+                  ...btn,
+                }}
+              >
+                Move to bench
+              </button>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  color: C.muted,
+                  margin: '6px 2px 0',
+                  textAlign: 'center',
+                }}
+              >
+                {v.posMenuCanBench
+                  ? 'They stay on the team and can be added back any time.'
+                  : 'The last player in the order cannot be benched.'}
+              </div>
+            </>
+          )}
         </Sheet>
       )}
 

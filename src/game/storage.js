@@ -31,6 +31,7 @@ const TRANSIENT = {
   playerEditor: null,
   teamEditor: null,
   resetFlow: null,
+  recordEditor: false,
   confirmDeleteGame: null,
   confirmFinal: false,
   selRunner: null,
@@ -91,7 +92,7 @@ export function migrateState(saved, fallback) {
   const merged = {
     ...fallback,
     ...state,
-    myTeam: { name: '', priorW: 0, priorL: 0, ...(state.myTeam || {}) },
+    myTeam: { name: '', priorW: 0, priorL: 0, priorT: 0, ...(state.myTeam || {}) },
     roster: Array.isArray(state.roster) ? state.roster : fallback.roster,
     teams,
     history: (Array.isArray(state.history) ? state.history : []).map((g) => migrateGame(g, teams)),
@@ -152,7 +153,7 @@ let lastWritten = null;
 export function saveState(state) {
   const {
     toast, posMenu, opponentPicker, playerEditor, teamEditor, resetFlow,
-    confirmDeleteGame, confirmFinal, selRunner, importPreview, importError, ...durable
+    confirmDeleteGame, confirmFinal, selRunner, importPreview, importError, recordEditor, ...durable
   } = state;
   const payload = JSON.stringify({ version: VERSION, state: durable });
 
