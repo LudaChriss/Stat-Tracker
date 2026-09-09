@@ -4,6 +4,7 @@
 
 import { AWAY_NAMES, ROSTER } from '../data/league.js';
 import { awayPid, homePid, isHomePid } from '../data/ids.js';
+import { EMPTY_LINE, rateString, seasonTotals } from './stats.js';
 
 const BASE_NAMES = ['1st', '2nd', '3rd'];
 const UNDO_DEPTH = 25;
@@ -73,7 +74,7 @@ export function currentKicker(s) {
       ...p,
       pid: homePid(p.id),
       ini: initials(p.name),
-      line: `${p.avg} AVG · ${p.obp} OBP · ${p.ops} OPS`,
+      line: seasonLine(s.history, homePid(p.id)),
       slot: (s.kiHome % s.lineup.length) + 1,
       of: s.lineup.length,
     };
@@ -90,8 +91,6 @@ export function currentKicker(s) {
     of: AWAY_NAMES.length,
   };
 }
-
-const EMPTY_LINE = { ab: 0, h: 0, r: 0, rbi: 0, bb: 0 };
 
 /** Read a player's line for this game. Returns zeroes if they haven't batted. */
 export function statLine(gameStats, pid) {
@@ -157,7 +156,12 @@ export function applyOutcome(s, o) {
 
   if (o.type === 'hit') {
     me.ab++;
-    if (o.k !== 'E') me.h++;
+    if (o.k !== 'E') {
+      me.h++;
+      if (o.n === 2) me.d++;
+      else if (o.n === 3) me.t++;
+      else if (o.n >= 4) me.hr++;
+    }
 
     // Runners advance by the value of the hit, from the lead runner back.
     for (let i = 2; i >= 0; i--) {
@@ -199,8 +203,10 @@ export function applyOutcome(s, o) {
     bases[0] = kicker.pid;
     detail = `${kicker.name} to 1st${runs ? ' · run forced in' : ''}`;
   } else {
-    me.ab++;
     outs++;
+    if (o.k === 'K') me.k++;
+
+    let sacrificed = false;
     if (o.mode === 'force' && bases[0]) {
       detail = `${playerName(bases[0])} forced at 2nd, ${kicker.name} safe at 1st`;
       bases[0] = kicker.pid;
@@ -208,11 +214,15 @@ export function applyOutcome(s, o) {
       runs++;
       scorers.push(bases[2]);
       me.rbi++;
+      sacrificed = true;
       detail = `${kicker.name} out · ${playerName(bases[2])} scores`;
       bases[2] = null;
     } else {
       detail = `${kicker.name} out`;
     }
+    // A sacrifice that actually brings a run in is not charged as an at-bat.
+    // A "sac fly" with nobody on third is just a fly out, and is.
+    if (!sacrificed) me.ab++;
   }
 
   // The opponent only gets scorebook entries when we're tracking both teams.
@@ -374,19 +384,17 @@ export function applyMoveLineup(s, idx, dir) {
   return { ...s, lineup };
 }
 
-/**
- * Format a 0..1 rate the way a scorebook does: leading-dot to three places,
- * except a perfect rate, which is written out as 1.000.
- */
-export function rateString(numerator, denominator) {
-  if (!denominator) return '—';
-  const milli = Math.round((1000 * numerator) / denominator);
-  return milli >= 1000 ? '1.000' : `.${milli.toString().padStart(3, '0')}`;
-}
+export { rateString };
 
 /** On-base percentage for an in-progress game line. */
 export function obpString(g) {
   return rateString(g.h + g.bb, g.ab + g.bb);
+}
+
+/** "AVG · OBP · OPS" summary shown under the batter at the plate. */
+export function seasonLine(history, pid) {
+  const t = seasonTotals(history, pid);
+  return `${t.avg} AVG · ${t.obp} OBP · ${t.ops} OPS`;
 }
 
 /**

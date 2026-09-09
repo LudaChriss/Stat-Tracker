@@ -6,7 +6,7 @@
 // down. A failed load falls back to a fresh season; a failed save is dropped.
 
 const KEY = 'score-tracker:state';
-const VERSION = 2;
+const VERSION = 3;
 
 // Ephemeral UI that must never come back from a reload: a toast mid-flight, a
 // half-open sheet, a selected runner, or the fake "syncing…" indicator whose

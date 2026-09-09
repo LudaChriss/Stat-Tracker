@@ -77,18 +77,18 @@ export default function PlayerProfile({ v }) {
             textAlign: 'center',
           }}
         >
-          SEASON · KICKBALL · career: .488 AVG / .942 OPS / 61 R
+          {v.profSummary}
         </div>
       </div>
 
       {/* On-base trend */}
       <div style={{ padding: '12px 16px 4px' }}>
-        <Section>On-base % by week</Section>
+        <Section>On-base % by game</Section>
         <Card style={{ padding: '14px 14px 10px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 74 }}>
-            {v.trend.map((b, i) => (
+            {v.trend.map((b) => (
               <div
-                key={i}
+                key={b.key}
                 style={{ flex: 1, borderRadius: '5px 5px 2px 2px', background: b.c, height: b.h }}
               />
             ))}
@@ -103,8 +103,8 @@ export default function PlayerProfile({ v }) {
               marginTop: 6,
             }}
           >
-            <span>WK 1</span>
-            <span>WK 9</span>
+            <span>{v.trendFirst}</span>
+            <span>{v.trendLast}</span>
           </div>
         </Card>
       </div>

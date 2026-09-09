@@ -12,6 +12,7 @@ import {
 } from '../data/league.js';
 import { teamAbbrev } from '../data/ids.js';
 import { tallyStandings, winPct } from './standings.js';
+import { onBaseByGame, seasonTotals, teamSeason } from './stats.js';
 import {
   awayPid,
   currentKicker,
@@ -34,11 +35,9 @@ const TONES = {
 
 const BASE_LABELS = ['1st', '2nd', '3rd'];
 
-const TREND_VALUES = [38, 42, 40, 47, 44, 52, 49, 55, 58];
-
 const STAT_SETS = [
-  { label: 'Core', cols: ['AVG', 'OBP', 'OPS'], pick: (p) => [p.avg, p.obp, p.ops] },
-  { label: 'Counting', cols: ['R', 'RBI', 'BB'], pick: (p) => [p.r, p.rbi, p.bb] },
+  { label: 'Core', cols: ['AVG', 'OBP', 'OPS'], pick: (t) => [t.avg, t.obp, t.ops] },
+  { label: 'Counting', cols: ['R', 'RBI', 'BB'], pick: (t) => [t.r, t.rbi, t.bb] },
 ];
 
 // Static demo data for the OCR review screen — this is what "came off the page".
@@ -310,7 +309,12 @@ export function deriveView(s, actions) {
       ini: initials(p.name),
       c: p.c,
       pos: posOf(p),
-      stat: g ? `Today ${g.h}-${g.ab} · ${g.r} R` : `${p.avg} AVG · ${p.ops} OPS`,
+      stat: g
+        ? `Today ${g.h}-${g.ab} · ${g.r} R`
+        : (() => {
+            const t = seasonTotals(s.history, homePid(p.id));
+            return t.gp ? `${t.avg} AVG · ${t.ops} OPS` : 'No games yet';
+          })(),
       upNow,
       upTag: upNow ? 'UP NOW ›' : '',
       goEntry: upNow ? actions.setLiveTab('entry') : actions.noop,
@@ -397,34 +401,34 @@ export function deriveView(s, actions) {
     // ---- League ------------------------------------------------------------
     schedule: deriveSchedule(s),
     standings,
-    leaders: [
-      {
-        name: 'Priya Shah',
-        team: 'GS',
-        val: 16 + (s.gameFinal ? statLine(s.gameStats, homePid(2)).r : 0),
-        c: C.coral,
-        rosterId: 2,
-      },
-      { name: 'Maya Ortiz', team: 'GS', val: 14, c: C.teal, rosterId: 0 },
-      { name: 'R. Chen', team: 'RC', val: 13, c: C.muted, rosterId: -1 },
-    ].map((p) => ({
-      ...p,
-      ini: initials(p.name),
-      onTap: p.rosterId >= 0 ? actions.openPlayer(p.rosterId, 'league') : actions.noop,
-    })),
+    leaders: ROSTER.map((p) => ({ player: p, total: seasonTotals(s.history, homePid(p.id)) }))
+      .filter(({ total }) => total.gp > 0)
+      .sort((a, b) => b.total.r - a.total.r || b.total.opsValue - a.total.opsValue)
+      .slice(0, 3)
+      .map(({ player, total }) => ({
+        name: player.name,
+        team: teamAbbrev(HOME_TEAM),
+        val: total.r,
+        c: player.c,
+        ini: initials(player.name),
+        onTap: actions.openPlayer(player.id, 'league'),
+      })),
 
     // ---- Team --------------------------------------------------------------
     teamRecord: `${me.w}–${me.l} · ${RANK_LABELS[me.rank - 1]} in league`,
-    teamAgg: [
-      { k: 'TEAM AVG', v: '.428' },
-      { k: 'TEAM OPS', v: '1.021' },
-      { k: 'RUNS/GM', v: '8.8' },
-      { k: 'ERRORS', v: '11' },
-    ],
+    teamAgg: (() => {
+      const t = teamSeason(s.history);
+      return [
+        { k: 'TEAM AVG', v: t.avg },
+        { k: 'TEAM OPS', v: t.ops },
+        { k: 'RUNS/GM', v: t.gp ? t.runsPerGame.toFixed(1) : '—' },
+        { k: 'GAMES', v: t.gp },
+      ];
+    })(),
     statSetLabel: set.label === 'Core' ? 'AVG · OBP · OPS' : 'R · RBI · BB',
     statCols: set.cols,
     rosterView: ROSTER.map((p) => {
-      const v = set.pick(p);
+      const v = set.pick(seasonTotals(s.history, homePid(p.id)));
       return {
         ...p,
         ini: initials(p.name),
@@ -558,20 +562,41 @@ export function deriveView(s, actions) {
 
     // ---- Player profile ----------------------------------------------------
     prof: { ...prof, ini: initials(prof.name) },
-    profStats: [
-      { k: 'AVG', v: prof.avg },
-      { k: 'OBP', v: prof.obp },
-      { k: 'SLG', v: prof.slg },
-      { k: 'OPS', v: prof.ops },
-      { k: 'RUNS', v: prof.r },
-      { k: 'RBI', v: prof.rbi },
-      { k: 'BB', v: prof.bb },
-      { k: 'K', v: prof.k },
-    ],
-    trend: TREND_VALUES.map((v, i) => ({
-      h: `${Math.round((v / 58) * 100)}%`,
-      c: i === TREND_VALUES.length - 1 ? C.coral : C.teal,
-    })),
+    profStats: (() => {
+      const t = seasonTotals(s.history, homePid(prof.id));
+      return [
+        { k: 'AVG', v: t.avg },
+        { k: 'OBP', v: t.obp },
+        { k: 'SLG', v: t.slg },
+        { k: 'OPS', v: t.ops },
+        { k: 'RUNS', v: t.r },
+        { k: 'RBI', v: t.rbi },
+        { k: 'BB', v: t.bb },
+        { k: 'K', v: t.k },
+      ];
+    })(),
+    profSummary: (() => {
+      const t = seasonTotals(s.history, homePid(prof.id));
+      if (!t.gp) return 'SEASON · no games played yet';
+      return `SEASON · ${t.gp} ${t.gp === 1 ? 'GAME' : 'GAMES'} · ${t.h}-for-${t.ab} · ${t.hr} HR · ${t.tb} TB`;
+    })(),
+    trend: (() => {
+      const games = onBaseByGame(s.history, homePid(prof.id)).slice(-9);
+      const peak = Math.max(1, ...games.map((g) => g.obp));
+      return games.map((g, i) => ({
+        key: g.id,
+        h: `${Math.round((g.obp / peak) * 100)}%`,
+        c: i === games.length - 1 ? C.coral : C.teal,
+      }));
+    })(),
+    trendFirst: (() => {
+      const g = onBaseByGame(s.history, homePid(prof.id)).slice(-9);
+      return g.length ? g[0].label : '';
+    })(),
+    trendLast: (() => {
+      const g = onBaseByGame(s.history, homePid(prof.id)).slice(-9);
+      return g.length ? g[g.length - 1].label : '';
+    })(),
     gameLog: derivePlayerLog(s, homePid(prof.id)),
     goBackFromPlayer: actions.go(s.playerFrom === 'league' ? 'league' : 'team'),
   };
