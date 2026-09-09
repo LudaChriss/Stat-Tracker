@@ -24,7 +24,7 @@ export default function TeamPage({ v, actions }) {
             justifyContent: 'space-between',
           }}
         >
-          <span>Kickball · Eastside Rec</span>
+          <span>{v.teamSubtitle}</span>
           <span
             style={{
               background: 'rgba(255,255,255,.14)',
@@ -38,7 +38,7 @@ export default function TeamPage({ v, actions }) {
           </span>
         </div>
         <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-.01em', marginTop: 2 }}>
-          Grass Stains
+          {v.myTeamName}
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.ice, marginTop: 2, ...tnum }}>
           {v.teamRecord}
@@ -213,17 +213,20 @@ export default function TeamPage({ v, actions }) {
           {v.teamGames.map((g) => (
             <div
               key={g.key}
+              onClick={g.onTap}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 10,
                 padding: '10px 14px',
                 borderTop: `1px solid ${C.hair}`,
+                cursor: g.onTap ? 'pointer' : 'default',
               }}
             >
-              <span style={{ fontSize: 11, fontWeight: 800, color: g.tagColor, minWidth: 38 }}>{g.tag}</span>
+              <span style={{ fontSize: 11, fontWeight: 800, color: g.tagColor, minWidth: 44 }}>{g.tag}</span>
               <span style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>{g.line}</span>
               <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, ...tnum }}>{g.sub}</span>
+              {g.onTap && <span style={{ color: C.edge, fontSize: 14 }}>›</span>}
             </div>
           ))}
         </Card>

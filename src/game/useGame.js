@@ -114,7 +114,7 @@ export function useGame() {
           bases: [null, null, null],
           half: 'bot',
           selRunner: null,
-          lastPlay: { k: '/', detail: 'Side over — Grass Stains up' },
+          lastPlay: { k: '/', detail: `Side over — ${s.myTeam.name} up` },
           tape: [...s.tape, '/'].slice(-9),
         })),
       undo: () => setState(applyUndo),
@@ -326,7 +326,9 @@ export function useGame() {
         }),
 
       renameMyTeam: (name) =>
-        setState((s) => (name.trim() ? { ...s, myTeam: { ...s.myTeam, name: name.trim() } } : s)),
+        setState((s) =>
+          name.trim() ? { ...s, myTeam: { ...s.myTeam, name: name.trim() }, resetFlow: null } : s,
+        ),
 
       // ---- Backup & reset --------------------------------------------------
       // Called straight from a tap: browsers block share/download otherwise.
@@ -338,6 +340,7 @@ export function useGame() {
       },
 
       openReset: () => patch({ resetFlow: 'confirm' }),
+      openRename: () => patch({ resetFlow: 'rename' }),
       closeReset: () => patch({ resetFlow: null }),
       confirmReset: () => patch({ resetFlow: 'name' }),
 
@@ -372,6 +375,21 @@ export function useGame() {
           teamEditor: null,
           editTeamId: null,
           screen: 'roster',
+        })),
+
+      // ---- Past games ------------------------------------------------------
+      openGame: (id, from) => () => patch({ screen: 'gameDetail', viewGameId: id, gameFrom: from }),
+      goBackFromGame: () =>
+        patch({ screen: stateRef.current.gameFrom === 'player' ? 'player' : 'team', viewGameId: null }),
+      openDeleteGame: (id) => () => patch({ confirmDeleteGame: id }),
+      cancelDeleteGame: () => patch({ confirmDeleteGame: null }),
+      deleteGame: () =>
+        setState((s) => ({
+          ...s,
+          history: s.history.filter((g) => g.id !== s.confirmDeleteGame),
+          confirmDeleteGame: null,
+          viewGameId: null,
+          screen: 'team',
         })),
 
       goRoster: go('roster'),

@@ -3,7 +3,7 @@ import { Avatar, Card, Section } from '../components/ui.jsx';
 
 const HEADER_GRID = '28px 1fr 40px 40px 48px';
 
-export default function LeagueHome({ v }) {
+export default function LeagueHome({ v, actions }) {
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div
@@ -24,11 +24,12 @@ export default function LeagueHome({ v }) {
                 color: C.frost,
               }}
             >
-              Eastside Rec · Fall 2026
+              {v.leagueEyebrow}
             </div>
-            <div style={{ fontSize: 23, fontWeight: 800, letterSpacing: '-.01em' }}>Kickball League</div>
+            <div style={{ fontSize: 23, fontWeight: 800, letterSpacing: '-.01em' }}>{v.leagueTitle}</div>
           </div>
           <button
+            onClick={actions.goRoster}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -43,7 +44,7 @@ export default function LeagueHome({ v }) {
               ...btn,
             }}
           >
-            Switch<span style={{ fontSize: 10 }}>▾</span>
+            Manage
           </button>
         </div>
 
@@ -76,12 +77,14 @@ export default function LeagueHome({ v }) {
       </div>
 
       {/* This week */}
+      {v.schedule.length > 0 && (
       <div style={{ padding: '16px 16px 8px' }}>
-        <Section>This week</Section>
+        <Section>Games</Section>
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          {v.schedule.map((g, i) => (
+          {v.schedule.map((g) => (
             <div
-              key={i}
+              key={g.key}
+              onClick={g.onTap}
               style={{
                 flex: '0 0 auto',
                 minWidth: 128,
@@ -89,6 +92,7 @@ export default function LeagueHome({ v }) {
                 border: `1px solid ${C.line}`,
                 borderRadius: 14,
                 padding: '10px 12px',
+                cursor: g.onTap ? 'pointer' : 'default',
               }}
             >
               <div
@@ -109,6 +113,7 @@ export default function LeagueHome({ v }) {
           ))}
         </div>
       </div>
+      )}
 
       {/* Standings */}
       <div style={{ padding: '8px 16px' }}>

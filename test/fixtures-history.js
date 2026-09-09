@@ -7,7 +7,7 @@
 // Every line is internally consistent: the runs across a team's lines sum to
 // that team's score in the game.
 
-import { homePid } from './ids.js';
+import { homePid } from '../src/data/ids.js';
 
 // d/t/hr break the hit total down so slugging can be derived; k is strikeouts.
 const line = (id, name, ab, h, r, rbi, bb = 0, { d = 0, t = 0, hr = 0, k = 0 } = {}) => ({
@@ -115,3 +115,42 @@ export const SEED_HISTORY = [
     ],
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Test fixtures only. The app itself ships with no data — this is the demo
+// season the suites exercise the engine against.
+// ---------------------------------------------------------------------------
+
+export const HOME_TEAM = 'Grass Stains';
+
+export const FIXTURE_ROSTER = [
+  { id: 0, name: 'Maya Ortiz',    num: 7,  pos: 'C',   c: '#0E7490' },
+  { id: 1, name: 'Deon Wallace',  num: 23, pos: 'P',   c: '#123D63' },
+  { id: 2, name: 'Priya Shah',    num: 4,  pos: 'SS',  c: '#FF6B4A' },
+  { id: 3, name: 'Cole Bennett',  num: 11, pos: '1B',  c: '#3D5A73' },
+  { id: 4, name: 'Ana Fuentes',   num: 9,  pos: 'LF',  c: '#0E7490' },
+  { id: 5, name: 'Jordan Lee',    num: 2,  pos: '2B',  c: '#123D63' },
+  { id: 6, name: 'Sam Whitfield', num: 30, pos: 'LCF', c: '#FF6B4A' },
+  { id: 7, name: 'Tess Nakamura', num: 5,  pos: '3B',  c: '#3D5A73' },
+  { id: 8, name: 'Ray Delgado',   num: 17, pos: 'RCF', c: '#0E7490' },
+  { id: 9, name: 'Nia Thompson',  num: 21, pos: 'RF',  c: '#123D63' },
+];
+
+export const FIXTURE_TEAMS = [
+  { id: 'rubber-chickens', name: 'Rubber Chickens', priorW: 6, priorL: 2, players: [] },
+  { id: 'dirt-merchants', name: 'Dirt Merchants', priorW: 5, priorL: 3, players: [] },
+  { id: 'sunday-scaries', name: 'Sunday Scaries', priorW: 3, priorL: 5, players: [] },
+  { id: 'the-ringers', name: 'The Ringers', priorW: 1, priorL: 7, players: [] },
+];
+
+/** Wrap the app's blank INITIAL_STATE in the demo season. */
+export const SEEDED = (blank) => ({
+  ...blank,
+  myTeam: { name: HOME_TEAM, priorW: 4, priorL: 1 },
+  roster: FIXTURE_ROSTER,
+  teams: FIXTURE_TEAMS,
+  opponentId: 'rubber-chickens',
+  history: SEED_HISTORY,
+  lineup: [0, 1, 2, 3, 4, 5, 6, 7],
+  bench: [8, 9],
+});

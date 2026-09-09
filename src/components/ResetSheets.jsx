@@ -90,19 +90,27 @@ export function ResetConfirmSheet({ v, actions }) {
   );
 }
 
-/** Step 2: name the new team. */
-export function ResetNameSheet({ actions }) {
-  const [name, setName] = useState('');
+/**
+ * Ask for a team name. Used for first-run setup, for step 2 of the reset, and
+ * for renaming later.
+ */
+export function NameSheet({
+  title = "What's your team called?",
+  subtitle = 'You can change this later, and add your players next.',
+  cta = 'Create my season',
+  initial = '',
+  onSubmit,
+  onClose,
+}) {
+  const [name, setName] = useState(initial);
 
   return (
     <Sheet
-      onClose={actions.closeReset}
+      onClose={onClose}
       sheetStyle={{ background: '#fff', color: C.ink, padding: '22px 20px 30px' }}
     >
-      <div style={{ fontSize: 19, fontWeight: 800 }}>What's your team called?</div>
-      <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 4 }}>
-        You can change this later, and add your players next.
-      </div>
+      <div style={{ fontSize: 19, fontWeight: 800 }}>{title}</div>
+      <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 4 }}>{subtitle}</div>
 
       <input
         autoFocus
@@ -110,7 +118,7 @@ export function ResetNameSheet({ actions }) {
         onChange={(e) => setName(e.target.value)}
         placeholder="Team name"
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && name.trim()) actions.startFreshSeason(name);
+          if (e.key === 'Enter' && name.trim()) onSubmit(name);
         }}
         style={{
           width: '100%',
@@ -126,15 +134,17 @@ export function ResetNameSheet({ actions }) {
       />
 
       <button
-        onClick={() => actions.startFreshSeason(name)}
+        onClick={() => onSubmit(name)}
         disabled={!name.trim()}
         style={{ ...primary, marginTop: 16, background: C.coral, opacity: name.trim() ? 1 : 0.4 }}
       >
-        Create my season
+        {cta}
       </button>
-      <button onClick={actions.closeReset} style={quiet}>
-        Cancel
-      </button>
+      {onClose && (
+        <button onClick={onClose} style={quiet}>
+          Cancel
+        </button>
+      )}
     </Sheet>
   );
 }

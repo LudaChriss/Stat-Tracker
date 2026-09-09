@@ -31,7 +31,7 @@ export default function StatsTab({ v, actions }) {
             ...btn,
           }}
         >
-          GRASS STAINS
+          {v.myTeamUpper}
         </button>
         <button
           onClick={actions.setStatsTeam('away')}

@@ -1,7 +1,7 @@
 import { C, btn, tnum } from '../theme.js';
 import { Avatar, Card, RoundButton, Section } from '../components/ui.jsx';
 import { PlayerFormSheet } from '../components/FormSheet.jsx';
-import { ResetConfirmSheet, ResetNameSheet } from '../components/ResetSheets.jsx';
+import { NameSheet, ResetConfirmSheet } from '../components/ResetSheets.jsx';
 
 /** Manage our own roster. Season stats come from played games, so removing a
  *  player here never rewrites the games they already appear in. */
@@ -27,6 +27,21 @@ export default function RosterEditor({ v, actions }) {
             {v.myTeamName} · {v.rosterCount} {v.rosterCount === 1 ? 'player' : 'players'}
           </div>
         </div>
+        <button
+          onClick={actions.openRename}
+          style={{
+            background: C.bg,
+            border: 'none',
+            borderRadius: 99,
+            padding: '8px 13px',
+            fontSize: 12.5,
+            fontWeight: 800,
+            color: C.header,
+            ...btn,
+          }}
+        >
+          Rename
+        </button>
       </div>
 
       <div style={{ padding: '14px 16px 8px' }}>
@@ -152,7 +167,19 @@ export default function RosterEditor({ v, actions }) {
       </div>
 
       {v.resetFlow === 'confirm' && <ResetConfirmSheet v={v} actions={actions} />}
-      {v.resetFlow === 'name' && <ResetNameSheet actions={actions} />}
+      {v.resetFlow === 'name' && (
+        <NameSheet onSubmit={actions.startFreshSeason} onClose={actions.closeReset} />
+      )}
+      {v.resetFlow === 'rename' && (
+        <NameSheet
+          title="Rename your team"
+          subtitle="This is the name shown in the standings."
+          cta="Save name"
+          initial={v.myTeamName}
+          onSubmit={actions.renameMyTeam}
+          onClose={actions.closeReset}
+        />
+      )}
 
       {v.playerEditor && (
         <PlayerFormSheet

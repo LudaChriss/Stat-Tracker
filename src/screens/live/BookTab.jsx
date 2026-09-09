@@ -54,7 +54,7 @@ export default function BookTab({ v }) {
         }}
       >
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', color: C.muted }}>
-          SCOREBOOK · GRASS STAINS
+          SCOREBOOK · {v.myTeamUpper}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button onClick={v.bookPrev} style={pager}>

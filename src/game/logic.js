@@ -4,7 +4,7 @@
 
 import { ANON_LINEUP_SIZE } from '../data/league.js';
 import { awayPid, homePid, isAnonPid, isHomePid, isOppPid, oppPid, parseOppPid } from '../data/ids.js';
-import { EMPTY_LINE, rateString, seasonTotals } from './stats.js';
+import { EMPTY_LINE, obpString, rateString, seasonTotals } from './stats.js';
 
 const BASE_NAMES = ['1st', '2nd', '3rd'];
 const UNDO_DEPTH = 25;
@@ -334,7 +334,7 @@ export function applyQuick(s, isRun) {
     patch.outs = 0;
     patch.bases = [null, null, null];
     patch.half = 'bot';
-    patch.lastPlay = { k: 'OUT', detail: '3 outs — Grass Stains up' };
+    patch.lastPlay = { k: 'OUT', detail: `3 outs — ${s.myTeam.name} up` };
     patch.tape = [...patch.tape, '/'];
   }
   return { ...s, ...patch };
@@ -423,12 +423,7 @@ export function applyMoveLineup(s, idx, dir) {
   return { ...s, lineup };
 }
 
-export { rateString };
-
-/** On-base percentage for an in-progress game line. */
-export function obpString(g) {
-  return rateString(g.h + g.bb, g.ab + g.bb);
-}
+export { obpString, rateString };
 
 /** "AVG · OBP · OPS" summary shown under the batter at the plate. */
 export function seasonLine(history, pid) {

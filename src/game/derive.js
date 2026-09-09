@@ -5,7 +5,16 @@
 import { POSITIONS, TEMPLATES } from '../data/league.js';
 import { oppPid, teamAbbrev } from '../data/ids.js';
 import { tallyStandings, winPct } from './standings.js';
-import { onBaseByGame, seasonTotals, teamSeason } from './stats.js';
+import {
+  addLines,
+  EMPTY_LINE,
+  normalizeLine,
+  obpString as lineObp,
+  onBaseByGame,
+  seasonTotals,
+  teamSeason,
+  withRates,
+} from './stats.js';
 import {
   awayLineup,
   currentKicker,
@@ -69,14 +78,24 @@ const RANK_LABELS = ['1st', '2nd', '3rd', '4th', '5th'];
 
 const RESULT_COLOR = { W: C.teal, L: C.fog, T: C.muted };
 
+/** "2B", "HR×2" etc., appended after a name in the box score. */
+function extraBaseTag(l) {
+  const parts = [];
+  if (l.hr) parts.push(l.hr > 1 ? `HR×${l.hr}` : 'HR');
+  if (l.t) parts.push(l.t > 1 ? `3B×${l.t}` : '3B');
+  if (l.d) parts.push(l.d > 1 ? `2B×${l.d}` : '2B');
+  return parts.join(' ');
+}
+
 /** Newest-first game rows for the team page, derived from the history. */
-function deriveTeamGames(s) {
+function deriveTeamGames(s, actions) {
   const played = [...s.history].reverse().map((g) => ({
     key: g.id,
     tag: `${g.result} ${g.score.us}–${g.score.them}`,
     tagColor: RESULT_COLOR[g.result] ?? C.fog,
     line: `${g.home ? 'vs' : 'at'} ${g.opponent}`,
     sub: g.label,
+    onTap: actions.openGame(g.id, 'team'),
   }));
 
   // A game in progress leads the list; once it's finalized it *is* the list.
@@ -100,7 +119,7 @@ function deriveTeamGames(s) {
 }
 
 /** A single player's game-by-game line, pulled out of the stored box scores. */
-function derivePlayerLog(s, pid) {
+function derivePlayerLog(s, pid, actions) {
   return [...s.history]
     .reverse()
     .map((g) => {
@@ -111,6 +130,7 @@ function derivePlayerLog(s, pid) {
         date: g.label,
         opp: `${g.home ? 'vs' : 'at'} ${g.opponent}`,
         line: `${l.h}-${l.ab} · ${l.r} R · ${l.rbi} RBI`,
+        onTap: actions.openGame(g.id, 'player'),
       };
     })
     .filter(Boolean);
@@ -137,37 +157,47 @@ function deriveStandings(s, actions) {
   });
 }
 
-/** The three "this week" cards; the first reflects tonight's game state. */
-function deriveSchedule(s) {
-  let tonight;
-  if (s.gameFinal) {
-    tonight = {
-      tag: 'FINAL',
-      tagColor: C.teal,
-      line: `${teamAbbrev(s.myTeam.name)} ${s.score.home} · ${teamAbbrev(opponentTeam(s).name)} ${s.score.away}`,
-      sub: 'Today · Riverbend #2',
-    };
-  } else if (s.gameActive) {
-    tonight = {
+/**
+ * The top of the league screen: tonight's game if there is one, then the most
+ * recent results. Nothing here is invented — there is no fixture list, so we
+ * only show games that exist.
+ */
+function deriveSchedule(s, actions) {
+  const cards = [];
+  const opp = s.teams.length ? opponentTeam(s).name : null;
+
+  if (s.gameActive) {
+    cards.push({
+      key: 'now',
       tag: '● LIVE',
       tagColor: C.coral,
       line: `${teamAbbrev(s.myTeam.name)} ${s.score.home} · ${teamAbbrev(opponentTeam(s).name)} ${s.score.away}`,
       sub: `${s.half === 'top' ? '▲ ' : '▼ '}${ordinal(s.inning)}`,
-    };
-  } else {
-    tonight = {
-      tag: 'TONIGHT',
+      onTap: actions.go('live'),
+    });
+  } else if (opp) {
+    cards.push({
+      key: 'next',
+      tag: 'NEXT',
       tagColor: C.coral,
-      line: `${teamAbbrev(s.myTeam.name)} vs ${teamAbbrev(opponentTeam(s).name)}`,
-      sub: '6:30 PM · Riverbend #2',
-    };
+      line: `${teamAbbrev(s.myTeam.name)} vs ${teamAbbrev(opp)}`,
+      sub: 'Tap to start scoring',
+      onTap: actions.goNewGame,
+    });
   }
 
-  return [
-    tonight,
-    { tag: 'THU', tagColor: C.muted, line: 'DM vs SS', sub: '7:00 PM · Riverbend #1' },
-    { tag: 'SAT', tagColor: C.muted, line: 'TR vs GS', sub: '10:00 AM · Eastside HS' },
-  ];
+  [...s.history].reverse().slice(0, 3).forEach((g) => {
+    cards.push({
+      key: g.id,
+      tag: `${g.result} ${g.score.us}–${g.score.them}`,
+      tagColor: RESULT_COLOR[g.result] ?? C.fog,
+      line: `${g.home ? 'vs' : 'at'} ${g.opponent}`,
+      sub: g.label,
+      onTap: actions.openGame(g.id, 'league'),
+    });
+  });
+
+  return cards;
 }
 
 /** Who's up next and in the hole, with their line so far today. */
@@ -427,6 +457,9 @@ export function deriveView(s, actions) {
       };
     }),
     resetFlow: s.resetFlow,
+    confirmDeleteGame: s.confirmDeleteGame,
+    // A team with no name means this is a fresh install.
+    needsSetup: !s.myTeam.name,
     resetSummary: [
       { label: 'Players on your roster', count: s.roster.length },
       { label: 'Opposing teams', count: s.teams.length },
@@ -468,11 +501,17 @@ export function deriveView(s, actions) {
       };
     })(),
 
+    // League header — derived, not invented.
+    myTeamUpper: (s.myTeam.name || 'My team').toUpperCase(),
+    teamSubtitle: `${tpl.name} · ${s.roster.length} ${s.roster.length === 1 ? 'player' : 'players'}`,
+    leagueTitle: s.myTeam.name || 'My team',
+    leagueEyebrow: `${tpl.name} · ${s.teams.length + 1} ${s.teams.length === 0 ? 'team' : 'teams'}`,
+    hasSchedule: s.gameActive || s.teams.length > 0 || s.history.length > 0,
     notSynced: !s.synced,
     toastMsg: s.toast,
 
     // ---- League ------------------------------------------------------------
-    schedule: deriveSchedule(s),
+    schedule: deriveSchedule(s, actions),
     standings,
     leaders: s.roster.map((p) => ({ player: p, total: seasonTotals(s.history, homePid(p.id)) }))
       .filter(({ total }) => total.gp > 0)
@@ -511,7 +550,7 @@ export function deriveView(s, actions) {
         onTap: actions.openPlayer(p.id, 'team'),
       };
     }),
-    teamGames: deriveTeamGames(s),
+    teamGames: deriveTeamGames(s, actions),
 
     // ---- New game ----------------------------------------------------------
     canStartGame: s.roster.length > 0 && s.teams.length > 0,
@@ -642,8 +681,53 @@ export function deriveView(s, actions) {
     })),
     schedRows: SCANNED_SCHEDULE.map((g) => ({ ...g, bd: g.low ? C.amberLine : C.line })),
 
+    // ---- One past game -----------------------------------------------------
+    gameDetail: (() => {
+      const g = s.history.find((x) => x.id === s.viewGameId);
+      if (!g) return null;
+
+      const dress = (lines) =>
+        lines.map((raw) => {
+          const l = normalizeLine(raw);
+          return { ...l, pid: raw.pid, name: raw.name, obp: lineObp(l), extra: extraBaseTag(l) };
+        });
+      const sum = (lines) => {
+        const total = lines.reduce((a, l) => addLines(a, normalizeLine(l)), { ...EMPTY_LINE });
+        return { ...withRates(total), obp: lineObp(total) };
+      };
+
+      const homeLines = g.lines.filter((l) => l.team === 'home');
+      const awayLines = g.lines.filter((l) => l.team === 'away');
+      const won = g.result === 'W';
+      const tied = g.result === 'T';
+
+      return {
+        id: g.id,
+        opponent: g.opponent,
+        homeAway: g.home ? 'vs' : 'at',
+        dateLabel: g.label,
+        sportLabel: (g.sport || 'kickball').replace(/^./, (c) => c.toUpperCase()),
+        score: `${g.score.us}–${g.score.them}`,
+        resultLabel: tied ? 'TIE' : won ? 'WIN' : 'LOSS',
+        resultBg: tied ? 'rgba(255,255,255,.2)' : won ? '#DDF1F4' : 'rgba(255,255,255,.2)',
+        resultFg: tied ? '#fff' : won ? C.teal : '#fff',
+        inningsLabel: g.innings ? `${g.innings} inn` : '',
+        homeLines: dress(homeLines),
+        awayLines: dress(awayLines),
+        homeTotals: sum(homeLines),
+        awayTotals: sum(awayLines),
+      };
+    })(),
+
     // ---- Player profile ----------------------------------------------------
-    prof: { ...prof, ini: initials(prof.name) },
+    prof: {
+      ...prof,
+      ini: initials(prof.name),
+      // Number is optional, so only show the "#" when there is one.
+      meta: [prof.num != null ? `#${prof.num}` : null, prof.pos, s.myTeam.name]
+        .filter(Boolean)
+        .join(' · '),
+    },
     profStats: (() => {
       const t = seasonTotals(s.history, profPid);
       return [
@@ -679,7 +763,7 @@ export function deriveView(s, actions) {
       const g = onBaseByGame(s.history, profPid).slice(-9);
       return g.length ? g[g.length - 1].label : '';
     })(),
-    gameLog: derivePlayerLog(s, profPid),
+    gameLog: derivePlayerLog(s, profPid, actions),
     goBackFromPlayer: actions.go(s.playerFrom === 'league' ? 'league' : 'team'),
   };
 }

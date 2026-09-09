@@ -1,4 +1,3 @@
-import { SEED_HISTORY } from './history.js';
 
 // Sport templates drive the entry buttons, the stat columns and the scoring
 // rules. Adding a sport here is enough to make the live screen rebuild itself.
@@ -75,37 +74,6 @@ export const TEMPLATES = {
 
 export const POSITIONS = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'LCF', 'RCF', 'RF'];
 
-// Identity only — every rate and counting stat is derived from the game
-// history in stats.js, so a player's season line is always the sum of the
-// games they actually played.
-export const SEED_ROSTER = [
-  { id: 0, name: 'Maya Ortiz',    num: 7,  pos: 'C',   c: '#0E7490' },
-  { id: 1, name: 'Deon Wallace',  num: 23, pos: 'P',   c: '#123D63' },
-  { id: 2, name: 'Priya Shah',    num: 4,  pos: 'SS',  c: '#FF6B4A' },
-  { id: 3, name: 'Cole Bennett',  num: 11, pos: '1B',  c: '#3D5A73' },
-  { id: 4, name: 'Ana Fuentes',   num: 9,  pos: 'LF',  c: '#0E7490' },
-  { id: 5, name: 'Jordan Lee',    num: 2,  pos: '2B',  c: '#123D63' },
-  { id: 6, name: 'Sam Whitfield', num: 30, pos: 'LCF', c: '#FF6B4A' },
-  { id: 7, name: 'Tess Nakamura', num: 5,  pos: '3B',  c: '#3D5A73' },
-  { id: 8, name: 'Ray Delgado',   num: 17, pos: 'RCF', c: '#0E7490' },
-  { id: 9, name: 'Nia Thompson',  num: 21, pos: 'RF',  c: '#123D63' },
-];
-
-
-/** Our team. priorW/priorL are games played before the app kept the book. */
-export const SEED_MY_TEAM = { name: 'Grass Stains', priorW: 4, priorL: 1 };
-
-/**
- * Opposing teams. A team needs only a name; `players` is optional and stays
- * empty until you care about tracking that team's individual stats.
- */
-export const SEED_TEAMS = [
-  { id: 'rubber-chickens', name: 'Rubber Chickens', priorW: 6, priorL: 2, players: [] },
-  { id: 'dirt-merchants', name: 'Dirt Merchants', priorW: 5, priorL: 3, players: [] },
-  { id: 'sunday-scaries', name: 'Sunday Scaries', priorW: 3, priorL: 5, players: [] },
-  { id: 'the-ringers', name: 'The Ringers', priorW: 1, priorL: 7, players: [] },
-];
-
 /** Assigned round-robin to new players so avatars stay visually distinct. */
 export const PLAYER_COLORS = ['#0E7490', '#123D63', '#FF6B4A', '#3D5A73'];
 
@@ -115,11 +83,12 @@ export const ANON_LINEUP_SIZE = 9;
 export const INITIAL_STATE = {
   screen: 'league',
   sport: 'kickball',
-  myTeam: SEED_MY_TEAM,
-  roster: SEED_ROSTER,
-  teams: SEED_TEAMS,
-  opponentId: 'rubber-chickens',
-  history: SEED_HISTORY,
+  // Ships empty. An unnamed team triggers first-run setup.
+  myTeam: { name: '', priorW: 0, priorL: 0 },
+  roster: [],
+  teams: [],
+  opponentId: null,
+  history: [],
   gameActive: false,
   gameFinal: false,
   liveTab: 'entry',
@@ -133,8 +102,8 @@ export const INITIAL_STATE = {
   score: { home: 0, away: 0 },
   kiHome: 0,
   kiAway: 0,
-  lineup: [0, 1, 2, 3, 4, 5, 6, 7],
-  bench: [8, 9],
+  lineup: [],
+  bench: [],
   posOverride: {},
   gameStats: {},
   events: [],
@@ -145,6 +114,9 @@ export const INITIAL_STATE = {
   teamEditor: null,
   editTeamId: null,
   resetFlow: null,
+  viewGameId: null,
+  gameFrom: 'team',
+  confirmDeleteGame: null,
   undoStack: [],
   lastPlay: null,
   tape: [],

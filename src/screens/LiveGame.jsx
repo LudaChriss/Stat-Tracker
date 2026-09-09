@@ -101,7 +101,7 @@ function Scoreboard({ v, actions }) {
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: v.homeLabelColor }}>GRASS STAINS</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: v.homeLabelColor }}>{v.myTeamUpper}</div>
           <div style={{ fontSize: 36, fontWeight: 800, lineHeight: 1, marginTop: 2, ...tnum }}>
             {v.score.home}
           </div>

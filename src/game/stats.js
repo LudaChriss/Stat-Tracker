@@ -55,6 +55,9 @@ export function withRates(t) {
   };
 }
 
+/** On-base percentage for a single game line. */
+export const obpString = (g) => rateString(g.h + g.bb, g.ab + g.bb);
+
 const lineFor = (game, pid) => game.lines.find((l) => l.pid === pid);
 
 /** One player's season to date. */

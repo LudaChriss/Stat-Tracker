@@ -42,7 +42,7 @@ export default function PlayerProfile({ v }) {
           <span>
             <span style={{ display: 'block', fontSize: 22, fontWeight: 800 }}>{v.prof.name}</span>
             <span style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: C.ice }}>
-              #{v.prof.num} · {v.prof.pos} · Grass Stains
+              {v.prof.meta}
             </span>
           </span>
         </div>
@@ -116,12 +116,14 @@ export default function PlayerProfile({ v }) {
           {v.gameLog.map((g) => (
             <div
               key={g.key}
+              onClick={g.onTap}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 10,
                 padding: '10px 14px',
                 borderTop: `1px solid ${C.hair}`,
+                cursor: 'pointer',
               }}
             >
               <span style={{ fontSize: 11.5, fontWeight: 700, color: C.fog, minWidth: 46, ...tnum }}>
@@ -129,6 +131,7 @@ export default function PlayerProfile({ v }) {
               </span>
               <span style={{ flex: 1, fontWeight: 700, fontSize: 13 }}>{g.opp}</span>
               <span style={{ fontSize: 12.5, fontWeight: 800, color: C.header, ...tnum }}>{g.line}</span>
+              <span style={{ color: C.edge, fontSize: 14 }}>›</span>
             </div>
           ))}
         </Card>
