@@ -65,7 +65,7 @@ function Scoreboard({ v, actions }) {
         }}
       >
         <div style={{ textAlign: 'left' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: v.awayLabelColor }}>RUBBER CHICKENS</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: v.awayLabelColor }}>{v.opponentUpper}</div>
           <div style={{ fontSize: 36, fontWeight: 800, lineHeight: 1, marginTop: 2, ...tnum }}>
             {v.score.away}
           </div>

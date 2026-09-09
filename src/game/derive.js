@@ -4,12 +4,14 @@
 
 import {
   AWAY_NAMES,
-  AWAY_TEAM,
   HOME_TEAM,
+  OPPONENTS,
   POSITIONS,
   ROSTER,
   TEMPLATES,
 } from '../data/league.js';
+import { teamAbbrev } from '../data/ids.js';
+import { tallyStandings, winPct } from './standings.js';
 import {
   awayPid,
   currentKicker,
@@ -31,15 +33,6 @@ const TONES = {
 };
 
 const BASE_LABELS = ['1st', '2nd', '3rd'];
-
-// Season standings before tonight's result is folded in.
-const BASE_STANDINGS = [
-  [HOME_TEAM, 7, 2, true],
-  [AWAY_TEAM, 6, 3, false],
-  ['Dirt Merchants', 5, 4, false],
-  ['Sunday Scaries', 3, 6, false],
-  ['The Ringers', 2, 7, false],
-];
 
 const TREND_VALUES = [38, 42, 40, 47, 44, 52, 49, 55, 58];
 
@@ -69,7 +62,7 @@ const SCANNED_SCHEDULE = [
   { opp: 'Dirt Merchants', when: 'Sat Sep 12 · 10:00 AM', where: 'Riverbend Park #1', low: false },
   { opp: 'Sunday Scaries', when: 'Thu Sep 17 · 6:30 PM',  where: 'Eastside HS field',  low: true },
   { opp: 'The Ringers',    when: 'Sat Sep 19 · 11:30 AM', where: 'Riverbend Park #2', low: false },
-  { opp: AWAY_TEAM,        when: 'Thu Sep 24 · 7:00 PM',  where: 'Riverbend Park #2', low: false },
+  { opp: 'Rubber Chickens', when: 'Thu Sep 24 · 7:00 PM', where: 'Riverbend Park #2', low: false },
 ];
 
 const OCR_STEPS = [
@@ -79,38 +72,76 @@ const OCR_STEPS = [
   { label: '2 to check', warn: true },
 ];
 
-const GAME_LOG = [
-  { date: 'Aug 30', opp: 'vs Dirt Merchants', line: '3-4 · 2 R · 1 RBI' },
-  { date: 'Aug 23', opp: 'at The Ringers',    line: '1-3 · 0 R · 1 RBI' },
-  { date: 'Aug 16', opp: 'vs Sunday Scaries', line: '2-3 · 2 R · 2 RBI' },
-  { date: 'Aug 9',  opp: `vs ${AWAY_TEAM}`,   line: '2-4 · 1 R · 0 RBI' },
-];
-
 const RANK_LABELS = ['1st', '2nd', '3rd', '4th', '5th'];
 
-/** League table, re-sorted once tonight's game is final. */
-function deriveStandings(s, actions) {
-  const rows = BASE_STANDINGS.map((t) => [...t]);
-  if (s.gameFinal) {
-    const won = s.score.home >= s.score.away;
-    rows[0][1] += won ? 1 : 0;
-    rows[0][2] += won ? 0 : 1;
-    rows[1][1] += won ? 0 : 1;
-    rows[1][2] += won ? 1 : 0;
-  }
-  rows.sort((a, b) => b[1] / (b[1] + b[2]) - a[1] / (a[1] + a[2]));
+const RESULT_COLOR = { W: C.teal, L: C.fog, T: C.muted };
 
-  return rows.map(([name, w, l, you], i) => ({
-    rank: i + 1,
-    name,
-    w,
-    l,
-    pct: rateString(w, w + l),
-    you,
-    wt: you ? 800 : 600,
-    bg: you ? '#F4FAFB' : '#fff',
-    onTap: you ? actions.goTeam : actions.noop,
+/** Newest-first game rows for the team page, derived from the history. */
+function deriveTeamGames(s) {
+  const played = [...s.history].reverse().map((g) => ({
+    key: g.id,
+    tag: `${g.result} ${g.score.us}–${g.score.them}`,
+    tagColor: RESULT_COLOR[g.result] ?? C.fog,
+    line: `${g.home ? 'vs' : 'at'} ${g.opponent}`,
+    sub: g.label,
   }));
+
+  // A game in progress leads the list; once it's finalized it *is* the list.
+  if (s.gameActive) {
+    return [
+      {
+        key: 'current',
+        tag: '● LIVE',
+        tagColor: C.coral,
+        line: `vs ${s.opponent}`,
+        sub: `${s.score.home}–${s.score.away}`,
+      },
+      ...played,
+    ];
+  }
+  if (s.gameFinal) return played;
+  return [
+    { key: 'next', tag: 'NEXT', tagColor: C.coral, line: `vs ${s.opponent}`, sub: 'Today 6:30' },
+    ...played,
+  ];
+}
+
+/** A single player's game-by-game line, pulled out of the stored box scores. */
+function derivePlayerLog(s, pid) {
+  return [...s.history]
+    .reverse()
+    .map((g) => {
+      const l = g.lines.find((x) => x.pid === pid);
+      if (!l) return null;
+      return {
+        key: g.id,
+        date: g.label,
+        opp: `${g.home ? 'vs' : 'at'} ${g.opponent}`,
+        line: `${l.h}-${l.ab} · ${l.r} R · ${l.rbi} RBI`,
+      };
+    })
+    .filter(Boolean);
+}
+
+/** League table: pre-app baseline plus every game in the history. */
+function deriveStandings(s, actions) {
+  const rows = tallyStandings(s.history).sort((a, b) => winPct(b) - winPct(a));
+
+  return rows.map((r, i) => {
+    const you = r.name === HOME_TEAM;
+    return {
+      rank: i + 1,
+      name: r.name,
+      w: r.w,
+      l: r.l,
+      gp: r.gp,
+      pct: rateString(r.w + r.t / 2, r.gp),
+      you,
+      wt: you ? 800 : 600,
+      bg: you ? '#F4FAFB' : '#fff',
+      onTap: you ? actions.goTeam : actions.noop,
+    };
+  });
 }
 
 /** The three "this week" cards; the first reflects tonight's game state. */
@@ -120,18 +151,23 @@ function deriveSchedule(s) {
     tonight = {
       tag: 'FINAL',
       tagColor: C.teal,
-      line: `GS ${s.score.home} · RC ${s.score.away}`,
+      line: `${teamAbbrev(HOME_TEAM)} ${s.score.home} · ${teamAbbrev(s.opponent)} ${s.score.away}`,
       sub: 'Today · Riverbend #2',
     };
   } else if (s.gameActive) {
     tonight = {
       tag: '● LIVE',
       tagColor: C.coral,
-      line: `GS ${s.score.home} · RC ${s.score.away}`,
+      line: `${teamAbbrev(HOME_TEAM)} ${s.score.home} · ${teamAbbrev(s.opponent)} ${s.score.away}`,
       sub: `${s.half === 'top' ? '▲ ' : '▼ '}${ordinal(s.inning)}`,
     };
   } else {
-    tonight = { tag: 'TONIGHT', tagColor: C.coral, line: 'GS vs RC', sub: '6:30 PM · Riverbend #2' };
+    tonight = {
+      tag: 'TONIGHT',
+      tagColor: C.coral,
+      line: `${teamAbbrev(HOME_TEAM)} vs ${teamAbbrev(s.opponent)}`,
+      sub: '6:30 PM · Riverbend #2',
+    };
   }
 
   return [
@@ -398,25 +434,17 @@ export function deriveView(s, actions) {
         onTap: actions.openPlayer(p.id, 'team'),
       };
     }),
-    teamGames: [
-      s.gameFinal
-        ? {
-            tag: 'FINAL',
-            tagColor: C.teal,
-            line: `vs ${AWAY_TEAM}`,
-            sub: `${s.score.home >= s.score.away ? 'W ' : 'L '}${s.score.home}–${s.score.away}`,
-          }
-        : {
-            tag: s.gameActive ? '● LIVE' : 'NEXT',
-            tagColor: C.coral,
-            line: `vs ${AWAY_TEAM}`,
-            sub: s.gameActive ? `${s.score.home}–${s.score.away}` : 'Today 6:30',
-          },
-      { tag: 'W 9–4', tagColor: C.teal, line: 'vs Dirt Merchants', sub: 'Aug 30' },
-      { tag: 'L 3–5', tagColor: C.fog, line: 'at The Ringers', sub: 'Aug 23' },
-    ],
+    teamGames: deriveTeamGames(s),
 
     // ---- New game ----------------------------------------------------------
+    opponent: s.opponent,
+    opponentUpper: s.opponent.toUpperCase(),
+    opponentPickerOpen: s.opponentPicker,
+    opponentOptions: OPPONENTS.map((name) => ({
+      name,
+      current: name === s.opponent,
+      onTap: actions.setOpponent(name),
+    })),
     sport: s.sport,
     trackMode: s.trackMode,
     kbBorder: s.sport === 'kickball' ? C.teal : C.line,
@@ -503,7 +531,7 @@ export function deriveView(s, actions) {
 
     // ---- Finalize ----------------------------------------------------------
     confirmFinal: s.confirmFinal,
-    finalLine: `${HOME_TEAM} ${s.score.home} — ${AWAY_TEAM} ${s.score.away}`,
+    finalLine: `${HOME_TEAM} ${s.score.home} — ${s.opponent} ${s.score.away}`,
     finalHeading: s.inning >= 7 ? 'End of the 7th — finalize game?' : 'Finalize game?',
 
     // ---- Scan --------------------------------------------------------------
@@ -544,7 +572,7 @@ export function deriveView(s, actions) {
       h: `${Math.round((v / 58) * 100)}%`,
       c: i === TREND_VALUES.length - 1 ? C.coral : C.teal,
     })),
-    gameLog: GAME_LOG,
+    gameLog: derivePlayerLog(s, homePid(prof.id)),
     goBackFromPlayer: actions.go(s.playerFrom === 'league' ? 'league' : 'team'),
   };
 }

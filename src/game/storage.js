@@ -6,7 +6,7 @@
 // down. A failed load falls back to a fresh season; a failed save is dropped.
 
 const KEY = 'score-tracker:state';
-const VERSION = 1;
+const VERSION = 2;
 
 // Ephemeral UI that must never come back from a reload: a toast mid-flight, a
 // half-open sheet, a selected runner, or the fake "syncing…" indicator whose
@@ -14,6 +14,7 @@ const VERSION = 1;
 const TRANSIENT = {
   toast: null,
   posMenu: null,
+  opponentPicker: false,
   confirmFinal: false,
   selRunner: null,
   synced: true,
@@ -55,7 +56,7 @@ export function loadState(fallback) {
 let lastWritten = null;
 
 export function saveState(state) {
-  const { toast, posMenu, confirmFinal, selRunner, ...durable } = state;
+  const { toast, posMenu, opponentPicker, confirmFinal, selRunner, ...durable } = state;
   const payload = JSON.stringify({ version: VERSION, state: durable });
 
   // State changes far more often than the durable slice does; skip no-op writes.

@@ -2,7 +2,8 @@
 // next state, so the React layer never has to reason about mutation order and
 // the undo stack can just hold snapshots.
 
-import { AWAY_NAMES, AWAY_TEAM, ROSTER } from '../data/league.js';
+import { AWAY_NAMES, ROSTER } from '../data/league.js';
+import { awayPid, homePid, isHomePid } from '../data/ids.js';
 
 const BASE_NAMES = ['1st', '2nd', '3rd'];
 const UNDO_DEPTH = 25;
@@ -23,9 +24,7 @@ const BY_ID = new Map(ROSTER.map((p) => [p.id, p]));
 /** Look a rostered player up by id. Ids are authoritative, not array order. */
 export const playerById = (id) => BY_ID.get(id);
 
-export const homePid = (rosterId) => `h${rosterId}`;
-export const awayPid = (slot) => `a${slot}`;
-export const isHomePid = (pid) => typeof pid === 'string' && pid[0] === 'h';
+export { awayPid, homePid, isHomePid };
 
 /** Display name for a player id, for detail lines and the runner controls. */
 export function playerName(pid) {
@@ -86,7 +85,7 @@ export function currentKicker(s) {
     name,
     c: '#5A7A90',
     ini: initials(name),
-    line: AWAY_TEAM,
+    line: s.opponent,
     slot: i + 1,
     of: AWAY_NAMES.length,
   };
@@ -270,7 +269,7 @@ export function applyQuick(s, isRun) {
       ...s,
       undoStack,
       score: { ...s.score, away: s.score.away + 1 },
-      lastPlay: { k: 'R', detail: `${AWAY_TEAM} run scored` },
+      lastPlay: { k: 'R', detail: `${s.opponent} run scored` },
       tape: [...s.tape, 'R'].slice(-9),
     };
   }
@@ -279,7 +278,7 @@ export function applyQuick(s, isRun) {
   const patch = {
     undoStack,
     outs,
-    lastPlay: { k: 'OUT', detail: `${AWAY_TEAM} out` },
+    lastPlay: { k: 'OUT', detail: `${s.opponent} out` },
     tape: [...s.tape, 'O'].slice(-9),
   };
   if (outs >= 3) {
@@ -388,4 +387,43 @@ export function rateString(numerator, denominator) {
 /** On-base percentage for an in-progress game line. */
 export function obpString(g) {
   return rateString(g.h + g.bb, g.ab + g.bb);
+}
+
+/**
+ * Freeze a finished game into a history record.
+ *
+ * Player names are captured at write time so that later roster edits — a
+ * rename, a removal — can never rewrite what happened in a past game. The
+ * record carries full per-player lines, so it doubles as the box score.
+ */
+export function buildGameRecord(s, { date = new Date() } = {}) {
+  const homeLines = s.lineup.map((id) => {
+    const p = playerById(id);
+    const pid = homePid(p.id);
+    return { pid, name: p.name, team: 'home', ...statLine(s.gameStats, pid) };
+  });
+
+  // Opponent lines only exist when the game was set to track both teams.
+  const awayLines = AWAY_NAMES.map((name, i) => {
+    const pid = awayPid(i);
+    return { pid, name, team: 'away', ...statLine(s.gameStats, pid) };
+  }).filter((l) => l.ab || l.bb);
+
+  const us = s.score.home;
+  const them = s.score.away;
+
+  return {
+    id: `g-${date.getTime()}`,
+    date: date.toISOString().slice(0, 10),
+    label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    opponent: s.opponent,
+    home: true,
+    score: { us, them },
+    // A game called level is a tie, not a win — the design's `>=` treated it
+    // as a win, which would misreport the standings.
+    result: us > them ? 'W' : us < them ? 'L' : 'T',
+    sport: s.sport,
+    innings: s.inning,
+    lines: [...homeLines, ...awayLines],
+  };
 }

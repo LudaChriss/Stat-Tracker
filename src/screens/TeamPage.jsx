@@ -208,9 +208,9 @@ export default function TeamPage({ v, actions }) {
       <div style={{ padding: '8px 16px 20px' }}>
         <Section>Games</Section>
         <Card style={{ padding: '4px 0' }}>
-          {v.teamGames.map((g, i) => (
+          {v.teamGames.map((g) => (
             <div
-              key={i}
+              key={g.key}
               style={{
                 display: 'flex',
                 alignItems: 'center',

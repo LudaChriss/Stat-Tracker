@@ -115,7 +115,7 @@ export default function PlayerProfile({ v }) {
         <Card style={{ padding: '4px 0' }}>
           {v.gameLog.map((g) => (
             <div
-              key={g.date}
+              key={g.key}
               style={{
                 display: 'flex',
                 alignItems: 'center',

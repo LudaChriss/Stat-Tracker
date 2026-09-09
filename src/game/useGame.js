@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_STATE } from '../data/league.js';
 import { loadState, saveState } from './storage.js';
 import {
+  buildGameRecord,
   applyMoveLineup,
   applyOutcome,
   applyQuick,
@@ -72,6 +73,9 @@ export function useGame() {
 
       // New game setup
       setSport: (sport) => () => patch({ sport }),
+      setOpponent: (opponent) => () => patch({ opponent, opponentPicker: false }),
+      openOpponentPicker: () => patch({ opponentPicker: true }),
+      closeOpponentPicker: () => patch({ opponentPicker: false }),
       setTrackMode: (trackMode) => () => patch({ trackMode }),
       startGame: () =>
         patch({
@@ -151,14 +155,19 @@ export function useGame() {
       askFinalize: () => patch({ confirmFinal: true }),
       cancelFinalize: () => patch({ confirmFinal: false }),
       doFinalize: () => {
-        patch({
+        // Freeze the box score before the live state is torn down. Built out
+        // here rather than inside the updater so the updater stays pure.
+        const record = buildGameRecord(stateRef.current);
+        setState((s) => ({
+          ...s,
+          history: [...s.history, record],
           confirmFinal: false,
           gameActive: false,
           gameFinal: true,
           screen: 'league',
           liveTab: 'entry',
           synced: false,
-        });
+        }));
         toast('Game finalized · standings updated', 3000);
         markUnsynced();
       },

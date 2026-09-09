@@ -47,7 +47,7 @@ export default function StatsTab({ v, actions }) {
             ...btn,
           }}
         >
-          RUBBER CHICKENS
+          {v.opponentUpper}
         </button>
       </div>
 
@@ -121,7 +121,7 @@ export default function StatsTab({ v, actions }) {
         </>
       ) : (
         <DarkCard style={{ padding: '22px 18px', textAlign: 'center' }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>Not tracking Rubber Chickens</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: '#fff' }}>Not tracking {v.opponent}</div>
           <div style={{ fontSize: 12, color: C.mist, fontWeight: 600, marginTop: 5 }}>
             This game is set to "our team only" — the opponent has score and outs, no player stat lines.
           </div>

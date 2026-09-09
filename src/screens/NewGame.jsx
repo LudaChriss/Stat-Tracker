@@ -1,5 +1,5 @@
 import { C, btn } from '../theme.js';
-import { Card, RoundButton, Section } from '../components/ui.jsx';
+import { Card, RoundButton, Section, Sheet } from '../components/ui.jsx';
 
 /** One of the two-up selectable option cards (sport template / tracking mode). */
 function PickCard({ title, sub, border, onClick, titleSize = 15 }) {
@@ -115,6 +115,7 @@ export default function NewGame({ v, actions }) {
       <div>
         <Section>Opponent</Section>
         <Card
+          onClick={actions.openOpponentPicker}
           style={{
             borderRadius: 14,
             padding: '13px 14px',
@@ -123,9 +124,10 @@ export default function NewGame({ v, actions }) {
             alignItems: 'center',
             fontWeight: 700,
             fontSize: 14.5,
+            cursor: 'pointer',
           }}
         >
-          Rubber Chickens
+          {v.opponent}
           <span style={{ color: C.fog, fontSize: 12 }}>▾</span>
         </Card>
       </div>
@@ -140,6 +142,36 @@ export default function NewGame({ v, actions }) {
       </div>
 
       <div style={{ flex: 1 }} />
+
+      {v.opponentPickerOpen && (
+        <Sheet
+          onClose={actions.closeOpponentPicker}
+          sheetStyle={{ background: '#fff', color: C.ink, padding: '18px 16px 30px' }}
+        >
+          <div style={{ fontSize: 17, fontWeight: 800 }}>Opponent</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+            {v.opponentOptions.map((o) => (
+              <button
+                key={o.name}
+                onClick={o.onTap}
+                style={{
+                  textAlign: 'left',
+                  background: o.current ? '#F4FAFB' : '#fff',
+                  border: `1.5px solid ${o.current ? C.teal : C.line}`,
+                  color: C.ink,
+                  borderRadius: 13,
+                  padding: '14px 14px',
+                  fontSize: 15,
+                  fontWeight: 700,
+                  ...btn,
+                }}
+              >
+                {o.name}
+              </button>
+            ))}
+          </div>
+        </Sheet>
+      )}
 
       <button
         onClick={actions.startGame}

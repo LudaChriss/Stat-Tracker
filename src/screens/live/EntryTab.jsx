@@ -63,7 +63,7 @@ function QuickScore({ v, actions }) {
   return (
     <div style={{ padding: '8px 16px 16px' }}>
       <DarkCard style={{ padding: '14px 16px' }}>
-        <div style={{ fontSize: 13, fontWeight: 800 }}>Rubber Chickens at kick</div>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>{v.opponent} at kick</div>
         <div style={{ fontSize: 11.5, color: C.mist, fontWeight: 600, marginTop: 3 }}>
           You're not tracking their at-bats. Adjust their runs if any score, then start your half.
         </div>

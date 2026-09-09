@@ -20,9 +20,12 @@ export function Section({ children, style }) {
 }
 
 /** White rounded panel on the light screens. */
-export function Card({ children, style }) {
+export function Card({ children, style, onClick }) {
   return (
-    <div style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 16, ...style }}>
+    <div
+      onClick={onClick}
+      style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 16, ...style }}
+    >
       {children}
     </div>
   );

@@ -1,3 +1,5 @@
+import { SEED_HISTORY } from './history.js';
+
 // Sport templates drive the entry buttons, the stat columns and the scoring
 // rules. Adding a sport here is enough to make the live screen rebuild itself.
 export const TEMPLATES = {
@@ -94,9 +96,29 @@ export const AWAY_NAMES = [
 export const HOME_TEAM = 'Grass Stains';
 export const AWAY_TEAM = 'Rubber Chickens';
 
+/**
+ * Records from before the app started keeping the book. Standings are the sum
+ * of this and the tallied game history — nothing is ever overwritten.
+ *
+ * These values are the design's opening table minus the results in
+ * SEED_HISTORY, so a fresh install still shows Grass Stains at 7-2.
+ */
+export const SEASON_BASELINE = [
+  { name: HOME_TEAM, w: 4, l: 1 },
+  { name: AWAY_TEAM, w: 6, l: 2 },
+  { name: 'Dirt Merchants', w: 5, l: 3 },
+  { name: 'Sunday Scaries', w: 3, l: 5 },
+  { name: 'The Ringers', w: 1, l: 7 },
+];
+
+/** Everyone we can be scheduled against. */
+export const OPPONENTS = SEASON_BASELINE.map((t) => t.name).filter((n) => n !== HOME_TEAM);
+
 export const INITIAL_STATE = {
   screen: 'league',
   sport: 'kickball',
+  opponent: AWAY_TEAM,
+  history: SEED_HISTORY,
   gameActive: false,
   gameFinal: false,
   liveTab: 'entry',
@@ -117,6 +139,7 @@ export const INITIAL_STATE = {
   events: [],
   bookOff: null,
   posMenu: null,
+  opponentPicker: false,
   undoStack: [],
   lastPlay: null,
   tape: [],
