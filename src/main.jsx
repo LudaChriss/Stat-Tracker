@@ -6,6 +6,10 @@ import './styles.css';
 
 // Register the offline shell. Dev is excluded so Vite's HMR assets are never
 // cached out from under a reload.
+//
+// Note: the service worker only ever touches the Cache Storage API, which is a
+// separate store from localStorage. Purging caches on activate — which is what
+// every deploy does — cannot affect a saved season.
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {

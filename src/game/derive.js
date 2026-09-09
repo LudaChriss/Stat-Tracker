@@ -5,6 +5,7 @@
 import { POSITIONS, TEMPLATES } from '../data/league.js';
 import { oppPid, teamAbbrev } from '../data/ids.js';
 import { tallyStandings, winPct } from './standings.js';
+import { getPreserved } from './storage.js';
 import {
   addLines,
   EMPTY_LINE,
@@ -457,6 +458,9 @@ export function deriveView(s, actions) {
       };
     }),
     resetFlow: s.resetFlow,
+    importPreview: s.importPreview,
+    importError: s.importError,
+    hasPreserved: !!getPreserved(),
     confirmDeleteGame: s.confirmDeleteGame,
     // A team with no name means this is a fresh install.
     needsSetup: !s.myTeam.name,

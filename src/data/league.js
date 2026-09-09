@@ -114,6 +114,8 @@ export const INITIAL_STATE = {
   teamEditor: null,
   editTeamId: null,
   resetFlow: null,
+  importPreview: null,
+  importError: null,
   viewGameId: null,
   gameFrom: 'team',
   confirmDeleteGame: null,

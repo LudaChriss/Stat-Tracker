@@ -1,11 +1,24 @@
 // localStorage persistence. The app is offline-first by design — a finalized
 // game and the standings it moved must survive a refresh.
 //
-// Everything here is best-effort: Safari private mode, disabled site data and
-// quota exhaustion all throw on access, and none of them should take the app
-// down. A failed load falls back to a fresh season; a failed save is dropped.
+// Two rules here, both learned the hard way:
+//
+//  1. A saved season is NEVER discarded because its shape looks old. Older
+//     payloads are migrated forward. Discarding on a version mismatch meant a
+//     routine deploy could silently wipe a real season, because the blank
+//     fallback was written straight back over it on the next save.
+//  2. If a payload genuinely cannot be read, the raw text is preserved under a
+//     separate key before anything overwrites it, so it can still be recovered
+//     or exported by hand.
+//
+// Everything is best-effort besides: Safari private mode, disabled site data
+// and quota exhaustion all throw on access, and none of them should take the
+// app down.
+
+import { normalizeLine } from './stats.js';
 
 const KEY = 'score-tracker:state';
+const PREVIOUS_KEY = 'score-tracker:previous';
 const VERSION = 3;
 
 // Ephemeral UI that must never come back from a reload: a toast mid-flight, a
@@ -21,6 +34,8 @@ const TRANSIENT = {
   confirmDeleteGame: null,
   confirmFinal: false,
   selRunner: null,
+  importPreview: null,
+  importError: null,
   synced: true,
 };
 
@@ -37,6 +52,64 @@ function resumableScreen(s) {
   return RESUMABLE_SCREENS.includes(s.screen) ? s.screen : 'team';
 }
 
+const slug = (name) =>
+  String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+/** Bring one stored game up to the current record shape. */
+export function migrateGame(game, teams) {
+  const lines = Array.isArray(game.lines) ? game.lines : [];
+  let opponentId = game.opponentId;
+  if (!opponentId && game.opponent) {
+    // Records written before games carried a team id: match on name.
+    const match = (teams || []).find((t) => t.name === game.opponent || t.id === slug(game.opponent));
+    opponentId = match ? match.id : slug(game.opponent);
+  }
+  return {
+    ...game,
+    opponentId,
+    home: game.home !== false,
+    score: game.score || { us: 0, them: 0 },
+    lines: lines.map((l) => ({ ...normalizeLine(l), pid: l.pid, name: l.name, team: l.team })),
+  };
+}
+
+/**
+ * Merge any previously stored shape onto the current defaults. Unknown or
+ * missing fields fall back; nothing is thrown away for being old.
+ */
+export function migrateState(saved, fallback) {
+  const state = saved && saved.state ? saved.state : saved;
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
+
+  const teams = (Array.isArray(state.teams) ? state.teams : fallback.teams).map((t) => ({
+    priorW: 0,
+    priorL: 0,
+    players: [],
+    ...t,
+  }));
+
+  const merged = {
+    ...fallback,
+    ...state,
+    myTeam: { name: '', priorW: 0, priorL: 0, ...(state.myTeam || {}) },
+    roster: Array.isArray(state.roster) ? state.roster : fallback.roster,
+    teams,
+    history: (Array.isArray(state.history) ? state.history : []).map((g) => migrateGame(g, teams)),
+    ...TRANSIENT,
+  };
+
+  return { ...merged, screen: resumableScreen(merged) };
+}
+
+/** Keep an unreadable payload rather than letting the next save bury it. */
+function preserve(raw) {
+  try {
+    if (raw && !localStorage.getItem(PREVIOUS_KEY)) localStorage.setItem(PREVIOUS_KEY, raw);
+  } catch {
+    /* nothing we can do */
+  }
+}
+
 export function loadState(fallback) {
   let raw;
   try {
@@ -47,15 +120,30 @@ export function loadState(fallback) {
   if (!raw) return fallback;
 
   try {
-    const saved = JSON.parse(raw);
-    // A version bump means the shape changed; start clean rather than merging
-    // a stale schema into the current one.
-    if (!saved || saved.version !== VERSION || !saved.state) return fallback;
-
-    const merged = { ...fallback, ...saved.state, ...TRANSIENT };
-    return { ...merged, screen: resumableScreen(merged) };
+    const migrated = migrateState(JSON.parse(raw), fallback);
+    if (migrated) return migrated;
+    preserve(raw);
+    return fallback;
   } catch {
-    return fallback; // corrupt payload
+    preserve(raw); // corrupt payload — keep it for manual recovery
+    return fallback;
+  }
+}
+
+/** Raw text of a save that could not be read, if there is one. */
+export function getPreserved() {
+  try {
+    return localStorage.getItem(PREVIOUS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearPreserved() {
+  try {
+    localStorage.removeItem(PREVIOUS_KEY);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -64,7 +152,7 @@ let lastWritten = null;
 export function saveState(state) {
   const {
     toast, posMenu, opponentPicker, playerEditor, teamEditor, resetFlow,
-    confirmDeleteGame, confirmFinal, selRunner, ...durable
+    confirmDeleteGame, confirmFinal, selRunner, importPreview, importError, ...durable
   } = state;
   const payload = JSON.stringify({ version: VERSION, state: durable });
 
@@ -77,4 +165,20 @@ export function saveState(state) {
   } catch {
     // Quota or private mode — keep playing, just without a saved game.
   }
+}
+
+/**
+ * Ask the browser to exempt this origin from routine storage eviction. Not a
+ * guarantee, and it does not survive uninstalling the app — export is still
+ * the only real backup.
+ */
+export function requestPersistence() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      return navigator.storage.persist().catch(() => false);
+    }
+  } catch {
+    /* ignore */
+  }
+  return Promise.resolve(false);
 }

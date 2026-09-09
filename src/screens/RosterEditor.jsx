@@ -1,11 +1,17 @@
+import { useRef } from 'react';
 import { C, btn, tnum } from '../theme.js';
 import { Avatar, Card, RoundButton, Section } from '../components/ui.jsx';
 import { PlayerFormSheet } from '../components/FormSheet.jsx';
 import { NameSheet, ResetConfirmSheet } from '../components/ResetSheets.jsx';
+import ImportSheet from '../components/ImportSheet.jsx';
 
 /** Manage our own roster. Season stats come from played games, so removing a
  *  player here never rewrites the games they already appear in. */
 export default function RosterEditor({ v, actions }) {
+  // A hidden file input is the only way to open the picker from a styled
+  // button; the tap has to originate from a real user gesture.
+  const fileRef = useRef(null);
+
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div
@@ -144,9 +150,110 @@ export default function RosterEditor({ v, actions }) {
           ⤓ Export season as JSON
         </button>
         <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
-          Your data lives only in this browser. Export now and then so a cleared
-          cache or a new phone doesn't take the season with it.
+          Your data lives only in this browser. Export now and then — reinstalling
+          the app or clearing site data will take the season with it.
         </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(e) => {
+            actions.importFile(e.target.files && e.target.files[0]);
+            e.target.value = ''; // allow re-picking the same file
+          }}
+        />
+        <button
+          onClick={() => fileRef.current && fileRef.current.click()}
+          style={{
+            width: '100%',
+            marginTop: 10,
+            background: '#fff',
+            border: `1.5px solid ${C.stroke}`,
+            color: C.header,
+            borderRadius: 13,
+            padding: 14,
+            minHeight: 48,
+            fontSize: 14.5,
+            fontWeight: 800,
+            ...btn,
+          }}
+        >
+          ⤒ Import season data
+        </button>
+        <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+          Restores a previously exported backup file.
+        </div>
+
+        {v.importError && (
+          <div
+            style={{
+              marginTop: 10,
+              background: '#FFF1D6',
+              border: `1.5px solid ${C.amberLine}`,
+              borderRadius: 12,
+              padding: '11px 13px',
+              fontSize: 12.5,
+              fontWeight: 700,
+              color: '#8A6100',
+            }}
+          >
+            {v.importError}
+          </div>
+        )}
+
+        {v.hasPreserved && (
+          <div
+            style={{
+              marginTop: 10,
+              background: '#FFF8E8',
+              border: `1.5px solid ${C.amberLine}`,
+              borderRadius: 12,
+              padding: '12px 13px',
+            }}
+          >
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: '#6B4E00' }}>
+              An earlier save couldn't be read
+            </div>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: '#8A6100', marginTop: 3 }}>
+              It was kept rather than overwritten. You can try restoring it.
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button
+                onClick={actions.importPreserved}
+                style={{
+                  flex: 1,
+                  background: '#fff',
+                  border: `1.5px solid ${C.amberLine}`,
+                  color: '#6B4E00',
+                  borderRadius: 11,
+                  minHeight: 44,
+                  fontSize: 13,
+                  fontWeight: 800,
+                  ...btn,
+                }}
+              >
+                Restore it
+              </button>
+              <button
+                onClick={actions.dismissPreserved}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#8A6100',
+                  minHeight: 44,
+                  padding: '0 12px',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  ...btn,
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        )}
 
         <button
           onClick={actions.openReset}
@@ -167,6 +274,7 @@ export default function RosterEditor({ v, actions }) {
         </button>
       </div>
 
+      {v.importPreview && <ImportSheet v={v} actions={actions} />}
       {v.resetFlow === 'confirm' && <ResetConfirmSheet v={v} actions={actions} />}
       {v.resetFlow === 'name' && (
         <NameSheet onSubmit={actions.startFreshSeason} onClose={actions.closeReset} />

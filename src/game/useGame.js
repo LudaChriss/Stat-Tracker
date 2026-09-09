@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_STATE, PLAYER_COLORS } from '../data/league.js';
 import { nextId, slugId } from '../data/ids.js';
 import { saveSeasonFile } from './export.js';
+import { applySeason, parseSeasonFile } from './importSeason.js';
+import { clearPreserved, getPreserved, requestPersistence } from './storage.js';
 import { loadState, saveState } from './storage.js';
 import {
   buildGameRecord,
@@ -44,6 +46,12 @@ export function useGame() {
   useEffect(() => {
     saveState(state);
   }, [state]);
+
+  // Ask once for eviction protection. Not a guarantee, and it does not
+  // survive uninstalling the app — export remains the only real backup.
+  useEffect(() => {
+    requestPersistence();
+  }, []);
 
   const patch = useCallback((p) => setState((s) => ({ ...s, ...p })), []);
 
@@ -338,6 +346,47 @@ export function useGame() {
         else if (result === 'copied') toast('Copied season JSON to the clipboard', 3200);
         else if (result === 'failed') toast('Could not export — try again', 3200);
       },
+
+      // ---- Import ----------------------------------------------------------
+      /** Read a chosen backup file and stage it for confirmation. */
+      importFile: async (file) => {
+        if (!file) return;
+        let text;
+        try {
+          text = await file.text();
+        } catch {
+          patch({ importError: "That file couldn't be read." });
+          return;
+        }
+        const result = parseSeasonFile(text);
+        if (!result.ok) {
+          patch({ importError: result.error });
+          return;
+        }
+        patch({ importPreview: { season: result.season, summary: result.summary }, importError: null });
+      },
+
+      /** Offer whatever unreadable payload was preserved on a failed load. */
+      importPreserved: () => {
+        const raw = getPreserved();
+        if (!raw) return;
+        const result = parseSeasonFile(raw);
+        if (!result.ok) {
+          patch({ importError: `Preserved save could not be read: ${result.error}` });
+          return;
+        }
+        patch({ importPreview: { season: result.season, summary: result.summary }, importError: null });
+      },
+
+      dismissPreserved: () => {
+        clearPreserved();
+        patch({ importError: null });
+      },
+
+      cancelImport: () => patch({ importPreview: null, importError: null }),
+
+      confirmImport: () =>
+        setState((s) => (s.importPreview ? applySeason(s, s.importPreview.season) : s)),
 
       openReset: () => patch({ resetFlow: 'confirm' }),
       openRename: () => patch({ resetFlow: 'rename' }),

@@ -45,10 +45,18 @@ eq('normal screen resumes', resume('player'), 'player');
 // Corruption / version handling.
 store['score-tracker:state'] = '{not json';
 eq('corrupt payload falls back', loadState(INITIAL_STATE), INITIAL_STATE);
-store['score-tracker:state'] = JSON.stringify({ version: 999, state: { score: { home: 1, away: 0 } } });
-eq('version mismatch falls back', loadState(INITIAL_STATE), INITIAL_STATE);
+// A version mismatch must MIGRATE, never discard. Discarding meant a routine
+// deploy could wipe a real season, because the blank fallback was written
+// straight back over it on the next save.
+store['score-tracker:state'] = JSON.stringify({
+  version: 999,
+  state: { score: { home: 1, away: 0 }, roster: [{ id: 0, name: 'Kept' }], history: [] },
+});
+eq('version mismatch keeps the roster', loadState(INITIAL_STATE).roster, [{ id: 0, name: 'Kept' }]);
+eq('version mismatch keeps game state', loadState(INITIAL_STATE).score, { home: 1, away: 0 });
 store['score-tracker:state'] = JSON.stringify({ version: 1 });
-eq('missing state falls back', loadState(INITIAL_STATE), INITIAL_STATE);
+const bare = loadState(INITIAL_STATE);
+eq('payload with no state yields defaults', [bare.roster.length, bare.teams.length, bare.history.length], [0, 0, 0]);
 
 // Storage unavailable must not throw.
 mode = 'throw-read';
