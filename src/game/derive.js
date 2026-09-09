@@ -2,23 +2,17 @@
 // place means the screen components stay declarative — they read values and
 // wire up handlers, they don't compute standings or scorebook grids.
 
-import {
-  AWAY_NAMES,
-  HOME_TEAM,
-  OPPONENTS,
-  POSITIONS,
-  ROSTER,
-  TEMPLATES,
-} from '../data/league.js';
-import { teamAbbrev } from '../data/ids.js';
+import { POSITIONS, TEMPLATES } from '../data/league.js';
+import { oppPid, teamAbbrev } from '../data/ids.js';
 import { tallyStandings, winPct } from './standings.js';
 import { onBaseByGame, seasonTotals, teamSeason } from './stats.js';
 import {
-  awayPid,
+  awayLineup,
   currentKicker,
   homePid,
   initials,
   obpString,
+  opponentTeam,
   ordinal,
   playerById,
   playerName,
@@ -92,7 +86,7 @@ function deriveTeamGames(s) {
         key: 'current',
         tag: '● LIVE',
         tagColor: C.coral,
-        line: `vs ${s.opponent}`,
+        line: `vs ${opponentTeam(s).name}`,
         sub: `${s.score.home}–${s.score.away}`,
       },
       ...played,
@@ -100,7 +94,7 @@ function deriveTeamGames(s) {
   }
   if (s.gameFinal) return played;
   return [
-    { key: 'next', tag: 'NEXT', tagColor: C.coral, line: `vs ${s.opponent}`, sub: 'Today 6:30' },
+    { key: 'next', tag: 'NEXT', tagColor: C.coral, line: `vs ${opponentTeam(s).name}`, sub: 'Today 6:30' },
     ...played,
   ];
 }
@@ -124,10 +118,10 @@ function derivePlayerLog(s, pid) {
 
 /** League table: pre-app baseline plus every game in the history. */
 function deriveStandings(s, actions) {
-  const rows = tallyStandings(s.history).sort((a, b) => winPct(b) - winPct(a));
+  const rows = tallyStandings(s).sort((a, b) => winPct(b) - winPct(a));
 
   return rows.map((r, i) => {
-    const you = r.name === HOME_TEAM;
+    const you = r.you;
     return {
       rank: i + 1,
       name: r.name,
@@ -150,21 +144,21 @@ function deriveSchedule(s) {
     tonight = {
       tag: 'FINAL',
       tagColor: C.teal,
-      line: `${teamAbbrev(HOME_TEAM)} ${s.score.home} · ${teamAbbrev(s.opponent)} ${s.score.away}`,
+      line: `${teamAbbrev(s.myTeam.name)} ${s.score.home} · ${teamAbbrev(opponentTeam(s).name)} ${s.score.away}`,
       sub: 'Today · Riverbend #2',
     };
   } else if (s.gameActive) {
     tonight = {
       tag: '● LIVE',
       tagColor: C.coral,
-      line: `${teamAbbrev(HOME_TEAM)} ${s.score.home} · ${teamAbbrev(s.opponent)} ${s.score.away}`,
+      line: `${teamAbbrev(s.myTeam.name)} ${s.score.home} · ${teamAbbrev(opponentTeam(s).name)} ${s.score.away}`,
       sub: `${s.half === 'top' ? '▲ ' : '▼ '}${ordinal(s.inning)}`,
     };
   } else {
     tonight = {
       tag: 'TONIGHT',
       tagColor: C.coral,
-      line: `${teamAbbrev(HOME_TEAM)} vs ${teamAbbrev(s.opponent)}`,
+      line: `${teamAbbrev(s.myTeam.name)} vs ${teamAbbrev(opponentTeam(s).name)}`,
       sub: '6:30 PM · Riverbend #2',
     };
   }
@@ -185,15 +179,16 @@ function deriveOnDeck(s) {
     let c;
     let pid;
     if (s.half === 'bot') {
-      const p = playerById(s.lineup[(s.kiHome + d) % s.lineup.length]);
+      const p = playerById(s, s.lineup[(s.kiHome + d) % s.lineup.length]);
       name = p.name;
       c = p.c;
       pid = homePid(p.id);
     } else {
-      const slot = (s.kiAway + d) % AWAY_NAMES.length;
-      name = AWAY_NAMES[slot];
-      c = C.muted;
-      pid = awayPid(slot);
+      const order = awayLineup(s);
+      const batter = order[(s.kiAway + d) % order.length];
+      name = batter.name;
+      c = batter.c;
+      pid = batter.pid;
     }
     const g = statLine(s.gameStats, pid);
     return {
@@ -216,7 +211,7 @@ function deriveBook(s, posOf) {
 
   const flat = [];
   s.lineup.forEach((id, idx) => {
-    const p = playerById(id);
+    const p = playerById(s, id);
     const pid = homePid(p.id);
     const [first, last] = p.name.split(' ');
     flat.push({
@@ -299,7 +294,7 @@ export function deriveView(s, actions) {
 
   // ---- Lineup / bench ------------------------------------------------------
   const lineupView = s.lineup.map((id, idx) => {
-    const p = playerById(id);
+    const p = playerById(s, id);
     const g = s.gameStats[homePid(p.id)];
     const upNow = s.gameActive && s.half === 'bot' && idx === s.kiHome % s.lineup.length;
     return {
@@ -326,7 +321,7 @@ export function deriveView(s, actions) {
   });
 
   const benchView = s.bench.map((id) => {
-    const p = playerById(id);
+    const p = playerById(s, id);
     return { key: homePid(p.id), name: p.name, ini: initials(p.name), c: p.c, add: actions.addFromBench(id) };
   });
 
@@ -334,17 +329,17 @@ export function deriveView(s, actions) {
   const statsHome = s.statsTeam === 'home';
   const statRoster = statsHome
     ? s.lineup.map((id, idx) => {
-        const p = playerById(id);
+        const p = playerById(s, id);
         return {
           pid: homePid(p.id),
           name: p.name,
           up: s.half === 'bot' && idx === s.kiHome % s.lineup.length,
         };
       })
-    : AWAY_NAMES.map((n, idx) => ({
-        pid: awayPid(idx),
-        name: n,
-        up: s.half === 'top' && idx === s.kiAway % AWAY_NAMES.length,
+    : awayLineup(s).map((b, idx) => ({
+        pid: b.pid,
+        name: b.name,
+        up: s.half === 'top' && idx === s.kiAway % awayLineup(s).length,
       }));
 
   const liveStatRows = statRoster.map((row) => {
@@ -365,8 +360,8 @@ export function deriveView(s, actions) {
 
   const book = deriveBook(s, posOf);
   const onDeck = deriveOnDeck(s);
-  const prof = playerById(s.playerId) || ROSTER[0];
-  const posMenuPlayer = s.posMenu != null ? playerById(s.posMenu) : null;
+  const prof = playerById(s, s.playerId) || s.roster[0] || null;
+  const posMenuPlayer = s.posMenu != null ? playerById(s, s.posMenu) : null;
   const quickMode = s.gameActive && s.trackMode === 'ours' && s.half === 'top';
   const sel = s.selRunner;
 
@@ -395,19 +390,87 @@ export function deriveView(s, actions) {
       };
     }),
 
+    // ---- Roster & team editing ---------------------------------------------
+    myTeamName: s.myTeam.name,
+    rosterCount: s.roster.length,
+    teamCount: s.teams.length,
+    rosterEditRows: s.roster.map((p) => {
+      const t = seasonTotals(s.history, homePid(p.id));
+      return {
+        key: homePid(p.id),
+        id: p.id,
+        name: p.name,
+        ini: initials(p.name),
+        c: p.c,
+        meta: `${p.num != null ? `#${p.num} · ` : ''}${p.pos}${
+          s.lineup.includes(p.id) ? ' · in order' : ' · bench'
+        }`,
+        season: t.gp ? `${t.avg} · ${t.gp}G` : 'no games',
+        onEdit: actions.openPlayerEditor(null, p.id),
+      };
+    }),
+    teamRows: s.teams.map((t) => {
+      const row = standings.find((r) => r.id === t.id);
+      return {
+        id: t.id,
+        name: t.name,
+        abbrev: teamAbbrev(t.name),
+        sub: t.players.length
+          ? `${t.players.length} ${t.players.length === 1 ? 'player' : 'players'} on file`
+          : 'No roster — score only',
+        record: row ? `${row.w}–${row.l}` : '0–0',
+        onOpen: actions.openTeamDetail(t.id),
+      };
+    }),
+    playerEditor: s.playerEditor,
+    playerEditorTarget: (() => {
+      const e = s.playerEditor;
+      if (!e || e.id == null) return null;
+      if (e.teamId == null) return playerById(s, e.id);
+      const team = s.teams.find((t) => t.id === e.teamId);
+      return team ? team.players.find((p) => p.id === e.id) : null;
+    })(),
+    teamEditor: s.teamEditor,
+    teamEditorTarget: s.teamEditor && s.teamEditor.id != null
+      ? s.teams.find((t) => t.id === s.teamEditor.id)
+      : null,
+    teamDetail: (() => {
+      const team = s.teams.find((t) => t.id === s.editTeamId);
+      if (!team) return null;
+      const row = standings.find((r) => r.id === team.id);
+      return {
+        id: team.id,
+        name: team.name,
+        record: row ? `${row.w}–${row.l}` : '0–0',
+        playerCount: team.players.length,
+        players: team.players.map((p) => {
+          const t = seasonTotals(s.history, oppPid(team.id, p.id));
+          return {
+            key: `${team.id}:${p.id}`,
+            name: p.name,
+            ini: initials(p.name),
+            c: p.c,
+            meta: `${p.num != null ? `#${p.num} · ` : ''}${p.pos}`,
+            season: t.gp ? `${t.avg} · ${t.gp}G` : 'no games',
+            onEdit: actions.openPlayerEditor(team.id, p.id),
+          };
+        }),
+      };
+    })(),
+
     notSynced: !s.synced,
     toastMsg: s.toast,
 
     // ---- League ------------------------------------------------------------
     schedule: deriveSchedule(s),
     standings,
-    leaders: ROSTER.map((p) => ({ player: p, total: seasonTotals(s.history, homePid(p.id)) }))
+    leaders: s.roster.map((p) => ({ player: p, total: seasonTotals(s.history, homePid(p.id)) }))
       .filter(({ total }) => total.gp > 0)
       .sort((a, b) => b.total.r - a.total.r || b.total.opsValue - a.total.opsValue)
       .slice(0, 3)
       .map(({ player, total }) => ({
         name: player.name,
-        team: teamAbbrev(HOME_TEAM),
+        team: teamAbbrev(s.myTeam.name),
         val: total.r,
         c: player.c,
         ini: initials(player.name),
@@ -427,7 +490,7 @@ export function deriveView(s, actions) {
     })(),
     statSetLabel: set.label === 'Core' ? 'AVG · OBP · OPS' : 'R · RBI · BB',
     statCols: set.cols,
-    rosterView: ROSTER.map((p) => {
+    rosterView: s.roster.map((p) => {
       const v = set.pick(seasonTotals(s.history, homePid(p.id)));
       return {
         ...p,
@@ -441,14 +504,17 @@ export function deriveView(s, actions) {
     teamGames: deriveTeamGames(s),
 
     // ---- New game ----------------------------------------------------------
-    opponent: s.opponent,
-    opponentUpper: s.opponent.toUpperCase(),
+    opponent: opponentTeam(s).name,
+    opponentUpper: opponentTeam(s).name.toUpperCase(),
     opponentPickerOpen: s.opponentPicker,
-    opponentOptions: OPPONENTS.map((name) => ({
-      name,
-      current: name === s.opponent,
-      onTap: actions.setOpponent(name),
+    opponentOptions: s.teams.map((t) => ({
+      id: t.id,
+      name: t.name,
+      sub: t.players.length ? `${t.players.length} players` : 'No roster — score only',
+      current: t.id === s.opponentId,
+      onTap: actions.setOpponent(t.id),
     })),
+    hasTeams: s.teams.length > 0,
     sport: s.sport,
     trackMode: s.trackMode,
     kbBorder: s.sport === 'kickball' ? C.teal : C.line,
@@ -490,7 +556,7 @@ export function deriveView(s, actions) {
         : 'First plate appearance today',
     onDeck,
     hasSel: sel != null && !!s.bases[sel],
-    selName: playerName(s.bases[sel]),
+    selName: playerName(s, s.bases[sel]),
     selBase: sel != null ? BASE_LABELS[sel] : '',
     selBackOp: sel != null && sel > 0 && !s.bases[sel - 1] ? 1 : 0.35,
     hasLast: !!s.lastPlay,
@@ -535,7 +601,7 @@ export function deriveView(s, actions) {
 
     // ---- Finalize ----------------------------------------------------------
     confirmFinal: s.confirmFinal,
-    finalLine: `${HOME_TEAM} ${s.score.home} — ${s.opponent} ${s.score.away}`,
+    finalLine: `${s.myTeam.name} ${s.score.home} — ${opponentTeam(s).name} ${s.score.away}`,
     finalHeading: s.inning >= 7 ? 'End of the 7th — finalize game?' : 'Finalize game?',
 
     // ---- Scan --------------------------------------------------------------

@@ -11,6 +11,9 @@ import LiveGame from './screens/LiveGame.jsx';
 import ScanCamera from './screens/ScanCamera.jsx';
 import ScanReview from './screens/ScanReview.jsx';
 import PlayerProfile from './screens/PlayerProfile.jsx';
+import RosterEditor from './screens/RosterEditor.jsx';
+import TeamsEditor from './screens/TeamsEditor.jsx';
+import TeamDetail from './screens/TeamDetail.jsx';
 import TabBar from './components/TabBar.jsx';
 import Toast from './components/Toast.jsx';
 
@@ -22,6 +25,9 @@ const SCREENS = {
   scanCam: ScanCamera,
   scanReview: ScanReview,
   player: PlayerProfile,
+  roster: RosterEditor,
+  teams: TeamsEditor,
+  teamDetail: TeamDetail,
 };
 
 // Screens that paint their own dark chrome need the status bar in white.

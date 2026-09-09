@@ -78,7 +78,7 @@ export const POSITIONS = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'LCF', 'RCF', 
 // Identity only — every rate and counting stat is derived from the game
 // history in stats.js, so a player's season line is always the sum of the
 // games they actually played.
-export const ROSTER = [
+export const SEED_ROSTER = [
   { id: 0, name: 'Maya Ortiz',    num: 7,  pos: 'C',   c: '#0E7490' },
   { id: 1, name: 'Deon Wallace',  num: 23, pos: 'P',   c: '#123D63' },
   { id: 2, name: 'Priya Shah',    num: 4,  pos: 'SS',  c: '#FF6B4A' },
@@ -91,36 +91,34 @@ export const ROSTER = [
   { id: 9, name: 'Nia Thompson',  num: 21, pos: 'RF',  c: '#123D63' },
 ];
 
-export const AWAY_NAMES = [
-  'R. Chen', 'D. Okafor', 'S. Patel', 'J. Kim', 'T. Alvarez',
-  'M. Ross', 'L. Nguyen', 'A. Brooks', 'C. Diaz',
-];
 
-export const HOME_TEAM = 'Grass Stains';
-export const AWAY_TEAM = 'Rubber Chickens';
+/** Our team. priorW/priorL are games played before the app kept the book. */
+export const SEED_MY_TEAM = { name: 'Grass Stains', priorW: 4, priorL: 1 };
 
 /**
- * Records from before the app started keeping the book. Standings are the sum
- * of this and the tallied game history — nothing is ever overwritten.
- *
- * These values are the design's opening table minus the results in
- * SEED_HISTORY, so a fresh install still shows Grass Stains at 7-2.
+ * Opposing teams. A team needs only a name; `players` is optional and stays
+ * empty until you care about tracking that team's individual stats.
  */
-export const SEASON_BASELINE = [
-  { name: HOME_TEAM, w: 4, l: 1 },
-  { name: AWAY_TEAM, w: 6, l: 2 },
-  { name: 'Dirt Merchants', w: 5, l: 3 },
-  { name: 'Sunday Scaries', w: 3, l: 5 },
-  { name: 'The Ringers', w: 1, l: 7 },
+export const SEED_TEAMS = [
+  { id: 'rubber-chickens', name: 'Rubber Chickens', priorW: 6, priorL: 2, players: [] },
+  { id: 'dirt-merchants', name: 'Dirt Merchants', priorW: 5, priorL: 3, players: [] },
+  { id: 'sunday-scaries', name: 'Sunday Scaries', priorW: 3, priorL: 5, players: [] },
+  { id: 'the-ringers', name: 'The Ringers', priorW: 1, priorL: 7, players: [] },
 ];
 
-/** Everyone we can be scheduled against. */
-export const OPPONENTS = SEASON_BASELINE.map((t) => t.name).filter((n) => n !== HOME_TEAM);
+/** Assigned round-robin to new players so avatars stay visually distinct. */
+export const PLAYER_COLORS = ['#0E7490', '#123D63', '#FF6B4A', '#3D5A73'];
+
+/** Batting slots shown for an opponent with no roster entered. */
+export const ANON_LINEUP_SIZE = 9;
 
 export const INITIAL_STATE = {
   screen: 'league',
   sport: 'kickball',
-  opponent: AWAY_TEAM,
+  myTeam: SEED_MY_TEAM,
+  roster: SEED_ROSTER,
+  teams: SEED_TEAMS,
+  opponentId: 'rubber-chickens',
   history: SEED_HISTORY,
   gameActive: false,
   gameFinal: false,
@@ -143,6 +141,9 @@ export const INITIAL_STATE = {
   bookOff: null,
   posMenu: null,
   opponentPicker: false,
+  playerEditor: null,
+  teamEditor: null,
+  editTeamId: null,
   undoStack: [],
   lastPlay: null,
   tape: [],

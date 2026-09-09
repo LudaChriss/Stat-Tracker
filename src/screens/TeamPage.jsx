@@ -118,9 +118,10 @@ export default function TeamPage({ v, actions }) {
             {v.statSetLabel} ⇄
           </button>
           <button
+            onClick={actions.goRoster}
             style={{ background: 'none', border: 'none', color: C.teal, fontSize: 12, fontWeight: 700, ...btn }}
           >
-            + Add player
+            Manage ›
           </button>
         </div>
       </div>
@@ -187,6 +188,7 @@ export default function TeamPage({ v, actions }) {
           ))}
         </Card>
         <button
+          onClick={actions.goRoster}
           style={{
             width: '100%',
             marginTop: 8,
@@ -200,7 +202,7 @@ export default function TeamPage({ v, actions }) {
             ...btn,
           }}
         >
-          + Add from another team
+          + Add / edit players and teams
         </button>
       </div>
 

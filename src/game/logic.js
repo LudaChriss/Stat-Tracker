@@ -2,8 +2,8 @@
 // next state, so the React layer never has to reason about mutation order and
 // the undo stack can just hold snapshots.
 
-import { AWAY_NAMES, ROSTER } from '../data/league.js';
-import { awayPid, homePid, isHomePid } from '../data/ids.js';
+import { ANON_LINEUP_SIZE } from '../data/league.js';
+import { awayPid, homePid, isAnonPid, isHomePid, isOppPid, oppPid, parseOppPid } from '../data/ids.js';
 import { EMPTY_LINE, rateString, seasonTotals } from './stats.js';
 
 const BASE_NAMES = ['1st', '2nd', '3rd'];
@@ -20,22 +20,53 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 // "a3" is the 4th slot in the opponent's order.
 // ---------------------------------------------------------------------------
 
-const BY_ID = new Map(ROSTER.map((p) => [p.id, p]));
+export { awayPid, homePid, isAnonPid, isHomePid, isOppPid, oppPid };
 
 /** Look a rostered player up by id. Ids are authoritative, not array order. */
-export const playerById = (id) => BY_ID.get(id);
+export const playerById = (s, id) => s.roster.find((p) => p.id === id);
 
-export { awayPid, homePid, isHomePid };
+export const teamById = (s, id) => s.teams.find((t) => t.id === id);
+
+/** The team we're playing, or a stub if it has been deleted since. */
+export function opponentTeam(s) {
+  return teamById(s, s.opponentId) || { id: s.opponentId, name: 'Opponent', players: [] };
+}
+
+/**
+ * The opponent's batting order. A team with no roster entered gets anonymous
+ * slots, whose stats deliberately do not accumulate across games — slot 1 is a
+ * different person every week.
+ */
+export function awayLineup(s) {
+  const team = opponentTeam(s);
+  if (team.players && team.players.length) {
+    return team.players.map((p) => ({
+      pid: oppPid(team.id, p.id),
+      name: p.name,
+      c: p.c,
+    }));
+  }
+  return Array.from({ length: ANON_LINEUP_SIZE }, (_, i) => ({
+    pid: awayPid(i),
+    name: `Batter ${i + 1}`,
+    c: '#5A7A90',
+  }));
+}
 
 /** Display name for a player id, for detail lines and the runner controls. */
-export function playerName(pid) {
+export function playerName(s, pid) {
   if (!pid) return '';
-  const n = Number(pid.slice(1));
   if (isHomePid(pid)) {
-    const p = playerById(n);
+    const p = playerById(s, Number(pid.slice(1)));
     return p ? p.name : '—';
   }
-  return AWAY_NAMES[n] ?? '—';
+  if (isOppPid(pid)) {
+    const { teamId, playerId } = parseOppPid(pid);
+    const team = teamById(s, teamId);
+    const p = team && team.players.find((x) => x.id === playerId);
+    return p ? p.name : '—';
+  }
+  return `Batter ${Number(pid.slice(1)) + 1}`;
 }
 
 export const initials = (n) =>
@@ -69,7 +100,7 @@ const pushUndo = (s) => [...s.undoStack, snapshot(s)].slice(-UNDO_DEPTH);
 /** Whoever is at the plate, with the id the stat map is keyed by. */
 export function currentKicker(s) {
   if (s.half === 'bot') {
-    const p = playerById(s.lineup[s.kiHome % s.lineup.length]);
+    const p = playerById(s, s.lineup[s.kiHome % s.lineup.length]);
     return {
       ...p,
       pid: homePid(p.id),
@@ -79,16 +110,17 @@ export function currentKicker(s) {
       of: s.lineup.length,
     };
   }
-  const i = s.kiAway % AWAY_NAMES.length;
-  const name = AWAY_NAMES[i];
+  const order = awayLineup(s);
+  const i = s.kiAway % order.length;
+  const batter = order[i];
   return {
-    pid: awayPid(i),
-    name,
-    c: '#5A7A90',
-    ini: initials(name),
-    line: s.opponent,
+    pid: batter.pid,
+    name: batter.name,
+    c: batter.c,
+    ini: initials(batter.name),
+    line: opponentTeam(s).name,
     slot: i + 1,
-    of: AWAY_NAMES.length,
+    of: order.length,
   };
 }
 
@@ -208,14 +240,14 @@ export function applyOutcome(s, o) {
 
     let sacrificed = false;
     if (o.mode === 'force' && bases[0]) {
-      detail = `${playerName(bases[0])} forced at 2nd, ${kicker.name} safe at 1st`;
+      detail = `${playerName(s, bases[0])} forced at 2nd, ${kicker.name} safe at 1st`;
       bases[0] = kicker.pid;
     } else if (o.mode === 'sac' && bases[2] && outs < 3) {
       runs++;
       scorers.push(bases[2]);
       me.rbi++;
       sacrificed = true;
-      detail = `${kicker.name} out · ${playerName(bases[2])} scores`;
+      detail = `${kicker.name} out · ${playerName(s, bases[2])} scores`;
       bases[2] = null;
     } else {
       detail = `${kicker.name} out`;
@@ -279,7 +311,7 @@ export function applyQuick(s, isRun) {
       ...s,
       undoStack,
       score: { ...s.score, away: s.score.away + 1 },
-      lastPlay: { k: 'R', detail: `${s.opponent} run scored` },
+      lastPlay: { k: 'R', detail: `${opponentTeam(s).name} run scored` },
       tape: [...s.tape, 'R'].slice(-9),
     };
   }
@@ -288,7 +320,7 @@ export function applyQuick(s, isRun) {
   const patch = {
     undoStack,
     outs,
-    lastPlay: { k: 'OUT', detail: `${s.opponent} out` },
+    lastPlay: { k: 'OUT', detail: `${opponentTeam(s).name} out` },
     tape: [...s.tape, 'O'].slice(-9),
   };
   if (outs >= 3) {
@@ -314,7 +346,7 @@ export function applyRunnerAction(s, adv) {
   let outs = s.outs;
   const score = { ...s.score };
   const pid = bases[i];
-  const name = playerName(pid);
+  const name = playerName(s, pid);
   const gameStats = clone(s.gameStats);
   const events = clone(s.events);
   let detail;
@@ -406,16 +438,15 @@ export function seasonLine(history, pid) {
  */
 export function buildGameRecord(s, { date = new Date() } = {}) {
   const homeLines = s.lineup.map((id) => {
-    const p = playerById(id);
+    const p = playerById(s, id);
     const pid = homePid(p.id);
     return { pid, name: p.name, team: 'home', ...statLine(s.gameStats, pid) };
   });
 
   // Opponent lines only exist when the game was set to track both teams.
-  const awayLines = AWAY_NAMES.map((name, i) => {
-    const pid = awayPid(i);
-    return { pid, name, team: 'away', ...statLine(s.gameStats, pid) };
-  }).filter((l) => l.ab || l.bb);
+  const awayLines = awayLineup(s)
+    .map(({ pid, name }) => ({ pid, name, team: 'away', ...statLine(s.gameStats, pid) }))
+    .filter((l) => l.ab || l.bb);
 
   const us = s.score.home;
   const them = s.score.away;
@@ -424,7 +455,8 @@ export function buildGameRecord(s, { date = new Date() } = {}) {
     id: `g-${date.getTime()}`,
     date: date.toISOString().slice(0, 10),
     label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    opponent: s.opponent,
+    opponentId: s.opponentId,
+    opponent: opponentTeam(s).name,
     home: true,
     score: { us, them },
     // A game called level is a tie, not a win — the design's `>=` treated it

@@ -15,12 +15,14 @@ const TRANSIENT = {
   toast: null,
   posMenu: null,
   opponentPicker: false,
+  playerEditor: null,
+  teamEditor: null,
   confirmFinal: false,
   selRunner: null,
   synced: true,
 };
 
-const RESUMABLE_SCREENS = ['league', 'team', 'newgame', 'live', 'player'];
+const RESUMABLE_SCREENS = ['league', 'team', 'newgame', 'live', 'player', 'roster', 'teams', 'teamDetail'];
 
 /**
  * Don't resume onto a screen that makes no sense cold: the scan flow is
@@ -56,7 +58,8 @@ export function loadState(fallback) {
 let lastWritten = null;
 
 export function saveState(state) {
-  const { toast, posMenu, opponentPicker, confirmFinal, selRunner, ...durable } = state;
+  const { toast, posMenu, opponentPicker, playerEditor, teamEditor, confirmFinal, selRunner, ...durable } =
+    state;
   const payload = JSON.stringify({ version: VERSION, state: durable });
 
   // State changes far more often than the durable slice does; skip no-op writes.

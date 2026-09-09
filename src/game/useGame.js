@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { INITIAL_STATE } from '../data/league.js';
+import { INITIAL_STATE, PLAYER_COLORS } from '../data/league.js';
+import { nextId, slugId } from '../data/ids.js';
 import { loadState, saveState } from './storage.js';
 import {
   buildGameRecord,
@@ -73,7 +74,7 @@ export function useGame() {
 
       // New game setup
       setSport: (sport) => () => patch({ sport }),
-      setOpponent: (opponent) => () => patch({ opponent, opponentPicker: false }),
+      setOpponent: (opponentId) => () => patch({ opponentId, opponentPicker: false }),
       openOpponentPicker: () => patch({ opponentPicker: true }),
       closeOpponentPicker: () => patch({ opponentPicker: false }),
       setTrackMode: (trackMode) => () => patch({ trackMode }),
@@ -184,6 +185,151 @@ export function useGame() {
         );
         markUnsynced();
       },
+
+      // ---- Roster & team editing ------------------------------------------
+      // teamId null means our own roster; otherwise an opposing team's.
+      openPlayerEditor: (teamId, id) => () => patch({ playerEditor: { teamId, id } }),
+      closePlayerEditor: () => patch({ playerEditor: null }),
+
+      savePlayer: ({ teamId, id, name, num, pos }) =>
+        setState((s) => {
+          const trimmed = name.trim();
+          if (!trimmed) return s;
+
+          if (teamId == null) {
+            if (id == null) {
+              const newId = nextId(s.roster);
+              const player = {
+                id: newId,
+                name: trimmed,
+                num,
+                pos,
+                c: PLAYER_COLORS[s.roster.length % PLAYER_COLORS.length],
+              };
+              // New players start on the bench, not silently in the order.
+              return { ...s, roster: [...s.roster, player], bench: [...s.bench, newId], playerEditor: null };
+            }
+            return {
+              ...s,
+              roster: s.roster.map((p) => (p.id === id ? { ...p, name: trimmed, num, pos } : p)),
+              playerEditor: null,
+            };
+          }
+
+          return {
+            ...s,
+            teams: s.teams.map((t) => {
+              if (t.id !== teamId) return t;
+              if (id == null) {
+                const newId = nextId(t.players);
+                return {
+                  ...t,
+                  players: [
+                    ...t.players,
+                    {
+                      id: newId,
+                      name: trimmed,
+                      num,
+                      pos,
+                      c: PLAYER_COLORS[t.players.length % PLAYER_COLORS.length],
+                    },
+                  ],
+                };
+              }
+              return {
+                ...t,
+                players: t.players.map((p) => (p.id === id ? { ...p, name: trimmed, num, pos } : p)),
+              };
+            }),
+            playerEditor: null,
+          };
+        }),
+
+      removePlayer: (teamId, id) => () =>
+        setState((s) => {
+          if (teamId != null) {
+            return {
+              ...s,
+              teams: s.teams.map((t) =>
+                t.id === teamId ? { ...t, players: t.players.filter((p) => p.id !== id) } : t,
+              ),
+              playerEditor: null,
+            };
+          }
+          // Drop them from the order and the bench too, or the lineup would
+          // point at a player who no longer exists. Past games keep their
+          // name, so history is unaffected.
+          const posOverride = { ...s.posOverride };
+          delete posOverride[id];
+          return {
+            ...s,
+            roster: s.roster.filter((p) => p.id !== id),
+            lineup: s.lineup.filter((x) => x !== id),
+            bench: s.bench.filter((x) => x !== id),
+            posOverride,
+            playerEditor: null,
+          };
+        }),
+
+      // Move a player between the batting order and the bench.
+      benchPlayer: (id) => () =>
+        setState((s) => ({
+          ...s,
+          lineup: s.lineup.filter((x) => x !== id),
+          bench: s.bench.includes(id) ? s.bench : [...s.bench, id],
+        })),
+
+      openTeamEditor: (id) => () => patch({ teamEditor: { id } }),
+      closeTeamEditor: () => patch({ teamEditor: null }),
+
+      saveTeam: ({ id, name, priorW, priorL }) =>
+        setState((s) => {
+          const trimmed = name.trim();
+          if (!trimmed) return s;
+          if (id == null) {
+            const team = {
+              id: slugId(trimmed, s.teams),
+              name: trimmed,
+              priorW: priorW || 0,
+              priorL: priorL || 0,
+              players: [],
+            };
+            return {
+              ...s,
+              teams: [...s.teams, team],
+              // First team added becomes the default opponent.
+              opponentId: s.teams.length ? s.opponentId : team.id,
+              teamEditor: null,
+            };
+          }
+          return {
+            ...s,
+            teams: s.teams.map((t) =>
+              t.id === id ? { ...t, name: trimmed, priorW: priorW || 0, priorL: priorL || 0 } : t,
+            ),
+            teamEditor: null,
+          };
+        }),
+
+      removeTeam: (id) => () =>
+        setState((s) => {
+          const teams = s.teams.filter((t) => t.id !== id);
+          return {
+            ...s,
+            teams,
+            // Past games keep the team's name, so the history stays readable.
+            opponentId: s.opponentId === id ? (teams[0] ? teams[0].id : null) : s.opponentId,
+            teamEditor: null,
+            screen: s.screen === 'teamDetail' ? 'teams' : s.screen,
+          };
+        }),
+
+      renameMyTeam: (name) =>
+        setState((s) => (name.trim() ? { ...s, myTeam: { ...s.myTeam, name: name.trim() } } : s)),
+
+      goRoster: go('roster'),
+      goTeams: go('teams'),
+      openTeamDetail: (id) => () => patch({ screen: 'teamDetail', editTeamId: id }),
 
       // Player profile
       openPlayer: (playerId, playerFrom) => () => patch({ screen: 'player', playerId, playerFrom }),

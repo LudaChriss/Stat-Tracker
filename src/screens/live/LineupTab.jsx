@@ -12,7 +12,7 @@ const arrowBtn = {
   ...btn,
 };
 
-export default function LineupTab({ v }) {
+export default function LineupTab({ v, actions }) {
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 20px' }}>
       <div
@@ -161,6 +161,7 @@ export default function LineupTab({ v }) {
       )}
 
       <button
+        onClick={actions.goRoster}
         style={{
           width: '100%',
           marginTop: 10,
@@ -174,7 +175,7 @@ export default function LineupTab({ v }) {
           ...btn,
         }}
       >
-        + Add player from another team
+        + Manage roster
       </button>
     </div>
   );
