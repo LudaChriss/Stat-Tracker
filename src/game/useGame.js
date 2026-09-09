@@ -161,6 +161,42 @@ export function useGame() {
           posMenu: null,
         })),
 
+      // Abandoning a game in progress
+      askCancelGame: () => patch({ confirmCancelGame: true }),
+      dismissCancelGame: () => patch({ confirmCancelGame: false }),
+
+      /**
+       * Throw the in-progress game away. Nothing is written to history, so
+       * standings and season stats are untouched — it is as if it never
+       * started. The batting order is kept so another game can be started
+       * straight away.
+       */
+      cancelGame: () =>
+        setState((s) => ({
+          ...s,
+          screen: 'newgame',
+          gameActive: false,
+          gameFinal: false,
+          liveTab: 'entry',
+          half: 'top',
+          inning: 1,
+          outs: 0,
+          bases: [null, null, null],
+          score: { home: 0, away: 0 },
+          kiHome: 0,
+          kiAway: 0,
+          gameStats: {},
+          events: [],
+          undoStack: [],
+          tape: [],
+          lastPlay: null,
+          bookOff: null,
+          selRunner: null,
+          posMenu: null,
+          confirmFinal: false,
+          confirmCancelGame: false,
+        })),
+
       // Finalizing
       askFinalize: () => patch({ confirmFinal: true }),
       cancelFinalize: () => patch({ confirmFinal: false }),

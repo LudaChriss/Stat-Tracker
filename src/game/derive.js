@@ -613,7 +613,6 @@ export function deriveView(s, actions) {
 
     // ---- Live header -------------------------------------------------------
     sportName: tpl.name,
-    trackLabel: s.trackMode === 'both' ? 'TRACKING BOTH' : 'OUR TEAM ONLY',
     score: s.score,
     halfArrow: s.half === 'top' ? '▲' : '▼',
     inningLabel: ordinal(s.inning),
@@ -705,6 +704,19 @@ export function deriveView(s, actions) {
 
     // ---- Finalize ----------------------------------------------------------
     confirmFinal: s.confirmFinal,
+    confirmCancelGame: s.confirmCancelGame,
+    // What is about to be thrown away, so the warning is concrete.
+    cancelSummary: `${s.myTeam.name} ${s.score.home} — ${opponentTeam(s).name} ${s.score.away}`,
+    cancelDetail: (() => {
+      const plays = s.events.length;
+      const half = s.half === 'top' ? 'Top' : 'Bottom';
+      return `${half} of the ${ordinal(s.inning).replace(' inning', '')}, ${plays} ${
+        plays === 1 ? 'play' : 'plays'
+      } recorded`;
+    })(),
+    // The default tracking mode is unremarkable; only flag the limited one,
+    // which keeps the header short enough for the extra control.
+    trackLabel: s.trackMode === 'ours' ? ' · OUR TEAM ONLY' : '',
     finalLine: `${s.myTeam.name} ${s.score.home} — ${opponentTeam(s).name} ${s.score.away}`,
     finalHeading: s.inning >= 7 ? 'End of the 7th — finalize game?' : 'Finalize game?',
 

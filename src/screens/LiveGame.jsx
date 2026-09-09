@@ -26,7 +26,18 @@ function Scoreboard({ v, actions }) {
           color: C.mist,
         }}
       >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            minWidth: 0,
+            flex: 1,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
           <span
             style={{
               width: 6,
@@ -34,27 +45,46 @@ function Scoreboard({ v, actions }) {
               borderRadius: 99,
               background: C.coral,
               animation: 'pulse 1.4s infinite',
+              flex: '0 0 auto',
             }}
           />
-          LIVE · {v.sportName} · {v.trackLabel}
+          LIVE · {v.sportName}
+          {v.trackLabel}
         </span>
-        <button
-          onClick={actions.askFinalize}
-          style={{
-            background: 'none',
-            border: '1px solid rgba(255,255,255,.25)',
-            color: '#fff',
-            borderRadius: 99,
-            padding: '0 12px',
-            minHeight: 40,
-            fontSize: 11,
-            fontWeight: 700,
-            flex: '0 0 auto',
-            ...btn,
-          }}
-        >
-          Game completed
-        </button>
+        <span style={{ display: 'flex', gap: 6, flex: '0 0 auto', marginLeft: 8 }}>
+          <button
+            onClick={actions.askCancelGame}
+            style={{
+              background: 'none',
+              border: '1px solid rgba(255,255,255,.18)',
+              color: C.mist,
+              borderRadius: 99,
+              padding: '0 11px',
+              minHeight: 40,
+              fontSize: 11,
+              fontWeight: 700,
+              ...btn,
+            }}
+          >
+            Cancel game
+          </button>
+          <button
+            onClick={actions.askFinalize}
+            style={{
+              background: 'none',
+              border: '1px solid rgba(255,255,255,.25)',
+              color: '#fff',
+              borderRadius: 99,
+              padding: '0 12px',
+              minHeight: 40,
+              fontSize: 11,
+              fontWeight: 700,
+              ...btn,
+            }}
+          >
+            Game completed
+          </button>
+        </span>
       </div>
 
       <div
@@ -298,6 +328,75 @@ export default function LiveGame({ v, actions }) {
               </div>
             </>
           )}
+        </Sheet>
+      )}
+
+      {/* Discard confirmation — deliberately worded so it can't be mistaken
+          for finishing the game. */}
+      {v.confirmCancelGame && (
+        <Sheet
+          onClose={actions.dismissCancelGame}
+          sheetStyle={{ background: '#fff', color: C.ink, padding: '22px 20px 30px' }}
+        >
+          <div style={{ fontSize: 19, fontWeight: 800 }}>Discard this game?</div>
+          <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 4 }}>
+            Everything scored so far is thrown away. Nothing is saved to your
+            game history, no stats are recorded, and the standings don't change
+            — as if the game never started.
+          </div>
+
+          <div
+            style={{
+              background: '#FFF8E8',
+              border: `1.5px solid ${C.amberLine}`,
+              borderRadius: 13,
+              padding: '12px 14px',
+              marginTop: 14,
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 800, color: '#6B4E00', ...tnum }}>
+              {v.cancelSummary}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#8A6100', marginTop: 2 }}>
+              {v.cancelDetail}
+            </div>
+          </div>
+
+          <button
+            onClick={actions.cancelGame}
+            style={{
+              width: '100%',
+              marginTop: 16,
+              background: '#B4441F',
+              border: 'none',
+              color: '#fff',
+              borderRadius: 14,
+              padding: 15,
+              minHeight: 48,
+              fontSize: 16,
+              fontWeight: 800,
+              ...btn,
+            }}
+          >
+            Discard game
+          </button>
+          <button
+            onClick={actions.dismissCancelGame}
+            style={{
+              width: '100%',
+              marginTop: 8,
+              background: 'none',
+              border: 'none',
+              color: C.muted,
+              padding: 10,
+              minHeight: 44,
+              fontSize: 14,
+              fontWeight: 700,
+              ...btn,
+            }}
+          >
+            Keep scoring
+          </button>
         </Sheet>
       )}
 
