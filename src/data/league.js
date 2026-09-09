@@ -144,6 +144,7 @@ export const INITIAL_STATE = {
   playerEditor: null,
   teamEditor: null,
   editTeamId: null,
+  resetFlow: null,
   undoStack: [],
   lastPlay: null,
   tape: [],

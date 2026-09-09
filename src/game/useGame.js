@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_STATE, PLAYER_COLORS } from '../data/league.js';
 import { nextId, slugId } from '../data/ids.js';
+import { saveSeasonFile } from './export.js';
 import { loadState, saveState } from './storage.js';
 import {
   buildGameRecord,
@@ -326,6 +327,52 @@ export function useGame() {
 
       renameMyTeam: (name) =>
         setState((s) => (name.trim() ? { ...s, myTeam: { ...s.myTeam, name: name.trim() } } : s)),
+
+      // ---- Backup & reset --------------------------------------------------
+      // Called straight from a tap: browsers block share/download otherwise.
+      exportSeason: async () => {
+        const result = await saveSeasonFile(stateRef.current);
+        if (result === 'shared' || result === 'downloaded') toast('Season data exported');
+        else if (result === 'copied') toast('Copied season JSON to the clipboard', 3200);
+        else if (result === 'failed') toast('Could not export — try again', 3200);
+      },
+
+      openReset: () => patch({ resetFlow: 'confirm' }),
+      closeReset: () => patch({ resetFlow: null }),
+      confirmReset: () => patch({ resetFlow: 'name' }),
+
+      /** Wipe everything and start a blank season under a new team name. */
+      startFreshSeason: (teamName) =>
+        setState((s) => ({
+          ...s,
+          myTeam: { name: teamName.trim() || 'My Team', priorW: 0, priorL: 0 },
+          roster: [],
+          teams: [],
+          lineup: [],
+          bench: [],
+          history: [],
+          opponentId: null,
+          posOverride: {},
+          gameStats: {},
+          events: [],
+          undoStack: [],
+          tape: [],
+          lastPlay: null,
+          bases: [null, null, null],
+          score: { home: 0, away: 0 },
+          outs: 0,
+          inning: 1,
+          half: 'top',
+          kiHome: 0,
+          kiAway: 0,
+          gameActive: false,
+          gameFinal: false,
+          resetFlow: null,
+          playerEditor: null,
+          teamEditor: null,
+          editTeamId: null,
+          screen: 'roster',
+        })),
 
       goRoster: go('roster'),
       goTeams: go('teams'),

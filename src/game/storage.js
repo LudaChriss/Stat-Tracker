@@ -17,6 +17,7 @@ const TRANSIENT = {
   opponentPicker: false,
   playerEditor: null,
   teamEditor: null,
+  resetFlow: null,
   confirmFinal: false,
   selRunner: null,
   synced: true,
@@ -58,7 +59,7 @@ export function loadState(fallback) {
 let lastWritten = null;
 
 export function saveState(state) {
-  const { toast, posMenu, opponentPicker, playerEditor, teamEditor, confirmFinal, selRunner, ...durable } =
+  const { toast, posMenu, opponentPicker, playerEditor, teamEditor, resetFlow, confirmFinal, selRunner, ...durable } =
     state;
   const payload = JSON.stringify({ version: VERSION, state: durable });
 

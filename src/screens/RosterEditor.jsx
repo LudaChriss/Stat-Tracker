@@ -1,6 +1,7 @@
 import { C, btn, tnum } from '../theme.js';
 import { Avatar, Card, RoundButton, Section } from '../components/ui.jsx';
 import { PlayerFormSheet } from '../components/FormSheet.jsx';
+import { ResetConfirmSheet, ResetNameSheet } from '../components/ResetSheets.jsx';
 
 /** Manage our own roster. Season stats come from played games, so removing a
  *  player here never rewrites the games they already appear in. */
@@ -107,6 +108,51 @@ export default function RosterEditor({ v, actions }) {
           <span style={{ color: C.edge, fontSize: 15 }}>›</span>
         </Card>
       </div>
+
+      <div style={{ padding: '0 16px 28px' }}>
+        <Section>Season data</Section>
+        <button
+          onClick={actions.exportSeason}
+          style={{
+            width: '100%',
+            background: '#fff',
+            border: `1.5px solid ${C.stroke}`,
+            color: C.header,
+            borderRadius: 13,
+            padding: 14,
+            fontSize: 14.5,
+            fontWeight: 800,
+            ...btn,
+          }}
+        >
+          ⤓ Export season as JSON
+        </button>
+        <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+          Your data lives only in this browser. Export now and then so a cleared
+          cache or a new phone doesn't take the season with it.
+        </div>
+
+        <button
+          onClick={actions.openReset}
+          style={{
+            width: '100%',
+            marginTop: 14,
+            background: 'none',
+            border: `1.5px solid ${C.line}`,
+            color: '#B4441F',
+            borderRadius: 13,
+            padding: 13,
+            fontSize: 14,
+            fontWeight: 800,
+            ...btn,
+          }}
+        >
+          Start fresh season
+        </button>
+      </div>
+
+      {v.resetFlow === 'confirm' && <ResetConfirmSheet v={v} actions={actions} />}
+      {v.resetFlow === 'name' && <ResetNameSheet actions={actions} />}
 
       {v.playerEditor && (
         <PlayerFormSheet

@@ -98,9 +98,14 @@ function snapshot(s) {
 const pushUndo = (s) => [...s.undoStack, snapshot(s)].slice(-UNDO_DEPTH);
 
 /** Whoever is at the plate, with the id the stat map is keyed by. */
+const NO_BATTER = { pid: null, name: '—', c: '#5A7A90', ini: '·', line: '', slot: 1, of: 0 };
+
 export function currentKicker(s) {
   if (s.half === 'bot') {
+    // A season that has just been reset has nobody in the order yet.
+    if (!s.lineup.length) return NO_BATTER;
     const p = playerById(s, s.lineup[s.kiHome % s.lineup.length]);
+    if (!p) return NO_BATTER;
     return {
       ...p,
       pid: homePid(p.id),
@@ -173,6 +178,8 @@ function retireSide(s, patch, outs, { symbol, detail, suffix, markTape }) {
 /** Record a plate-appearance outcome for whoever is up. */
 export function applyOutcome(s, o) {
   if (!s.gameActive) return s;
+  // Nobody at the plate — nothing to record against.
+  if (!currentKicker(s).pid) return s;
 
   const undoStack = pushUndo(s);
   const bases = [...s.bases];

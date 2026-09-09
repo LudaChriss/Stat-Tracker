@@ -127,7 +127,7 @@ export default function NewGame({ v, actions }) {
             cursor: 'pointer',
           }}
         >
-          {v.opponent}
+          {v.hasTeams ? v.opponent : 'No teams yet — tap to add'}
           <span style={{ color: C.fog, fontSize: 12 }}>▾</span>
         </Card>
       </div>
@@ -149,6 +149,11 @@ export default function NewGame({ v, actions }) {
           sheetStyle={{ background: '#fff', color: C.ink, padding: '18px 16px 30px' }}
         >
           <div style={{ fontSize: 17, fontWeight: 800 }}>Opponent</div>
+          {!v.hasTeams && (
+            <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 8 }}>
+              No teams yet. Add the teams in your league to score a game against them.
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
             {v.opponentOptions.map((o) => (
               <button
@@ -167,14 +172,70 @@ export default function NewGame({ v, actions }) {
                 }}
               >
                 {o.name}
+                <span style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: C.muted, marginTop: 2 }}>
+                  {o.sub}
+                </span>
               </button>
             ))}
+            <button
+              onClick={actions.goTeams}
+              style={{
+                textAlign: 'left',
+                background: 'none',
+                border: `1.5px dashed ${C.edge}`,
+                color: C.muted,
+                borderRadius: 13,
+                padding: '14px',
+                fontSize: 14,
+                fontWeight: 800,
+                ...btn,
+              }}
+            >
+              + Add a team
+            </button>
           </div>
         </Sheet>
       )}
 
+      {!v.canStartGame && (
+        <div
+          style={{
+            background: '#FFF8E8',
+            border: `1.5px solid ${C.amberLine}`,
+            borderRadius: 13,
+            padding: '12px 14px',
+            fontSize: 13,
+            fontWeight: 700,
+            color: '#6B4E00',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          {v.startBlockedReason}
+          <button
+            onClick={actions.goRoster}
+            style={{
+              background: '#fff',
+              border: `1.5px solid ${C.amberLine}`,
+              color: '#6B4E00',
+              borderRadius: 10,
+              padding: '7px 12px',
+              fontSize: 12.5,
+              fontWeight: 800,
+              flex: '0 0 auto',
+              ...btn,
+            }}
+          >
+            Manage
+          </button>
+        </div>
+      )}
+
       <button
         onClick={actions.startGame}
+        disabled={!v.canStartGame}
         style={{
           background: C.coral,
           border: 'none',
@@ -184,6 +245,7 @@ export default function NewGame({ v, actions }) {
           fontSize: 17,
           fontWeight: 800,
           boxShadow: '0 6px 18px rgba(255,107,74,.35)',
+          opacity: v.canStartGame ? 1 : 0.4,
           ...btn,
         }}
       >

@@ -360,7 +360,11 @@ export function deriveView(s, actions) {
 
   const book = deriveBook(s, posOf);
   const onDeck = deriveOnDeck(s);
-  const prof = playerById(s, s.playerId) || s.roster[0] || null;
+  // With an empty roster there is nobody to profile. Everything downstream
+  // still has to render — a crash here takes the whole app down.
+  const profPlayer = playerById(s, s.playerId) || s.roster[0] || null;
+  const prof = profPlayer || { id: -1, name: '—', num: null, pos: '—', c: C.muted };
+  const profPid = profPlayer ? homePid(profPlayer.id) : 'none';
   const posMenuPlayer = s.posMenu != null ? playerById(s, s.posMenu) : null;
   const quickMode = s.gameActive && s.trackMode === 'ours' && s.half === 'top';
   const sel = s.selRunner;
@@ -422,6 +426,12 @@ export function deriveView(s, actions) {
         onOpen: actions.openTeamDetail(t.id),
       };
     }),
+    resetFlow: s.resetFlow,
+    resetSummary: [
+      { label: 'Players on your roster', count: s.roster.length },
+      { label: 'Opposing teams', count: s.teams.length },
+      { label: 'Recorded games', count: s.history.length },
+    ],
     playerEditor: s.playerEditor,
     playerEditorTarget: (() => {
       const e = s.playerEditor;
@@ -504,6 +514,12 @@ export function deriveView(s, actions) {
     teamGames: deriveTeamGames(s),
 
     // ---- New game ----------------------------------------------------------
+    canStartGame: s.roster.length > 0 && s.teams.length > 0,
+    startBlockedReason: !s.roster.length
+      ? 'Add players to your roster first'
+      : !s.teams.length
+        ? 'Add an opposing team first'
+        : '',
     opponent: opponentTeam(s).name,
     opponentUpper: opponentTeam(s).name.toUpperCase(),
     opponentPickerOpen: s.opponentPicker,
@@ -629,7 +645,7 @@ export function deriveView(s, actions) {
     // ---- Player profile ----------------------------------------------------
     prof: { ...prof, ini: initials(prof.name) },
     profStats: (() => {
-      const t = seasonTotals(s.history, homePid(prof.id));
+      const t = seasonTotals(s.history, profPid);
       return [
         { k: 'AVG', v: t.avg },
         { k: 'OBP', v: t.obp },
@@ -642,12 +658,12 @@ export function deriveView(s, actions) {
       ];
     })(),
     profSummary: (() => {
-      const t = seasonTotals(s.history, homePid(prof.id));
+      const t = seasonTotals(s.history, profPid);
       if (!t.gp) return 'SEASON · no games played yet';
       return `SEASON · ${t.gp} ${t.gp === 1 ? 'GAME' : 'GAMES'} · ${t.h}-for-${t.ab} · ${t.hr} HR · ${t.tb} TB`;
     })(),
     trend: (() => {
-      const games = onBaseByGame(s.history, homePid(prof.id)).slice(-9);
+      const games = onBaseByGame(s.history, profPid).slice(-9);
       const peak = Math.max(1, ...games.map((g) => g.obp));
       return games.map((g, i) => ({
         key: g.id,
@@ -656,14 +672,14 @@ export function deriveView(s, actions) {
       }));
     })(),
     trendFirst: (() => {
-      const g = onBaseByGame(s.history, homePid(prof.id)).slice(-9);
+      const g = onBaseByGame(s.history, profPid).slice(-9);
       return g.length ? g[0].label : '';
     })(),
     trendLast: (() => {
-      const g = onBaseByGame(s.history, homePid(prof.id)).slice(-9);
+      const g = onBaseByGame(s.history, profPid).slice(-9);
       return g.length ? g[g.length - 1].label : '';
     })(),
-    gameLog: derivePlayerLog(s, homePid(prof.id)),
+    gameLog: derivePlayerLog(s, profPid),
     goBackFromPlayer: actions.go(s.playerFrom === 'league' ? 'league' : 'team'),
   };
 }
