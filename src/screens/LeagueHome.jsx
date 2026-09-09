@@ -1,7 +1,7 @@
 import { C, FONT, btn, tnum } from '../theme.js';
 import { Avatar, Card, Section } from '../components/ui.jsx';
 
-const HEADER_GRID = '28px 1fr 40px 40px 48px';
+const HEADER_GRID = '22px minmax(0, 1fr) 34px 34px 46px';
 
 export default function LeagueHome({ v, actions }) {
   return (
@@ -9,7 +9,7 @@ export default function LeagueHome({ v, actions }) {
       <div
         style={{
           background: `linear-gradient(160deg,${C.header},${C.teal})`,
-          padding: '64px 20px 20px',
+          padding: 'var(--hdr-top) 20px 20px',
           color: '#fff',
         }}
       >
@@ -26,7 +26,9 @@ export default function LeagueHome({ v, actions }) {
             >
               {v.leagueEyebrow}
             </div>
-            <div style={{ fontSize: 23, fontWeight: 800, letterSpacing: '-.01em' }}>{v.leagueTitle}</div>
+            <div style={{ fontSize: 'clamp(19px, 5.6vw, 23px)', fontWeight: 800, letterSpacing: '-.01em' }}>
+              {v.leagueTitle}
+            </div>
           </div>
           <button
             onClick={actions.goRoster}
@@ -38,7 +40,8 @@ export default function LeagueHome({ v, actions }) {
               border: '1px solid rgba(255,255,255,.25)',
               color: '#fff',
               borderRadius: 99,
-              padding: '8px 12px',
+              padding: '0 14px',
+              minHeight: 44,
               fontSize: 12,
               fontWeight: 700,
               ...btn,

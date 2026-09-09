@@ -50,7 +50,7 @@ export default function NewGame({ v, actions }) {
       style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '64px 16px 16px',
+        padding: 'var(--hdr-top) 16px 16px',
         display: 'flex',
         flexDirection: 'column',
         gap: 14,

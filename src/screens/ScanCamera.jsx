@@ -4,7 +4,7 @@ import { RoundButton } from '../components/ui.jsx';
 export default function ScanCamera({ v, actions }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: C.deep, color: '#fff' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '60px 16px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 'var(--hdr-top) 16px 14px' }}>
         <RoundButton onClick={actions.goTeam} style={{ background: 'rgba(255,255,255,.12)', color: '#fff' }}>
           ‹
         </RoundButton>

@@ -77,9 +77,9 @@ export function RoundButton({ children, onClick, style }) {
       onClick={onClick}
       style={{
         borderRadius: 99,
-        width: 34,
-        height: 34,
-        fontSize: 15,
+        width: 42,
+        height: 42,
+        fontSize: 17,
         border: 'none',
         fontFamily: FONT,
         cursor: 'pointer',

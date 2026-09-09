@@ -1,86 +1,88 @@
 import { C } from '../../theme.js';
 
-const BASE = {
+// Bases are small by design — the diamond has to read as a diamond. So the
+// visual square sits inside a much larger transparent hit area, which is what
+// actually gets tapped.
+const HIT = 44;
+const SIZE = 104;
+
+const hitArea = {
   position: 'absolute',
-  width: 23,
-  height: 23,
-  borderRadius: 6,
+  width: HIT,
+  height: HIT,
+  transform: 'translate(-50%, -50%)',
+  display: 'grid',
+  placeItems: 'center',
   cursor: 'pointer',
+  WebkitTapHighlightColor: 'transparent',
 };
+
+const pip = (base, size) => ({
+  width: size,
+  height: size,
+  transform: 'rotate(45deg)',
+  borderRadius: size > 20 ? 6 : 5,
+  border: `2px solid ${base.border}`,
+  background: base.bg,
+  animation: base.anim,
+});
 
 /**
  * The base diamond. Each occupied base is tappable to select the runner on it,
  * which reveals the advance / out controls.
  */
 export default function Diamond({ b1, b2, b3 }) {
+  const bases = [
+    { key: 'second', base: b2, left: '50%', top: '15%' },
+    { key: 'third', base: b3, left: '15%', top: '50%' },
+    { key: 'first', base: b1, left: '85%', top: '50%' },
+  ];
+
   return (
-    <div style={{ position: 'relative', width: 100, height: 100, flex: '0 0 auto' }}>
-      {/* infield outline */}
+    <div style={{ position: 'relative', width: SIZE, height: SIZE, flex: '0 0 auto' }}>
+      {/*
+        Infield outline. A square rotated 45deg puts its corners half a
+        diagonal from centre, so a 50% square reaches 50% +/- 35.4% — which is
+        exactly where the bases below are positioned.
+      */}
       <div
         style={{
           position: 'absolute',
           left: '50%',
           top: '50%',
-          width: 60,
-          height: 60,
-          transform: 'translate(-50%,-54%) rotate(45deg)',
+          width: '50%',
+          height: '50%',
+          transform: 'translate(-50%,-50%) rotate(45deg)',
           border: '1.5px solid rgba(255,255,255,.22)',
           borderRadius: 8,
         }}
       />
-      {/* second */}
-      <div
-        onClick={b2.tap}
-        style={{
-          ...BASE,
-          left: '50%',
-          top: 6,
-          transform: 'translateX(-50%) rotate(45deg)',
-          border: `2px solid ${b2.border}`,
-          background: b2.bg,
-          animation: b2.anim,
-        }}
-      />
-      {/* third */}
-      <div
-        onClick={b3.tap}
-        style={{
-          ...BASE,
-          left: 4,
-          top: '50%',
-          transform: 'translateY(-70%) rotate(45deg)',
-          border: `2px solid ${b3.border}`,
-          background: b3.bg,
-          animation: b3.anim,
-        }}
-      />
-      {/* first */}
-      <div
-        onClick={b1.tap}
-        style={{
-          ...BASE,
-          right: 4,
-          top: '50%',
-          transform: 'translateY(-70%) rotate(45deg)',
-          border: `2px solid ${b1.border}`,
-          background: b1.bg,
-          animation: b1.anim,
-        }}
-      />
-      {/* home */}
-      <div
-        style={{
-          position: 'absolute',
-          left: '50%',
-          bottom: 8,
-          transform: 'translateX(-50%) rotate(45deg)',
-          width: 19,
-          height: 19,
-          borderRadius: 5,
-          border: '2px solid rgba(255,255,255,.25)',
-          background: C.panel,
-        }}
-      />
+
+      {bases.map(({ key, base, left, top }) => (
+        <div
+          key={key}
+          onClick={base.tap}
+          role="button"
+          aria-label={key}
+          style={{ ...hitArea, left, top }}
+        >
+          <div style={pip(base, 23)} />
+        </div>
+      ))}
+
+      {/* home plate is not a runner position, so it is not interactive */}
+      <div style={{ ...hitArea, left: '50%', top: '85%', cursor: 'default' }}>
+        <div
+          style={{
+            width: 19,
+            height: 19,
+            transform: 'rotate(45deg)',
+            borderRadius: 5,
+            border: '2px solid rgba(255,255,255,.25)',
+            background: C.panel,
+          }}
+        />
+      </div>
     </div>
   );
 }

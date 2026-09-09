@@ -7,7 +7,7 @@ export default function PlayerProfile({ v }) {
       <div
         style={{
           background: `linear-gradient(160deg,${C.header},${C.teal})`,
-          padding: '60px 16px 18px',
+          padding: 'var(--hdr-top) 16px 18px',
           color: '#fff',
         }}
       >
@@ -21,7 +21,8 @@ export default function PlayerProfile({ v }) {
               background: 'rgba(255,255,255,.14)',
               border: 'none',
               borderRadius: 99,
-              padding: '7px 14px',
+              padding: '0 16px',
+              minHeight: 42,
               fontSize: 12,
               fontWeight: 800,
               color: '#fff',
@@ -40,7 +41,9 @@ export default function PlayerProfile({ v }) {
             style={{ border: '2.5px solid rgba(255,255,255,.5)' }}
           />
           <span>
-            <span style={{ display: 'block', fontSize: 22, fontWeight: 800 }}>{v.prof.name}</span>
+            <span style={{ display: 'block', fontSize: 'clamp(18px, 5.4vw, 22px)', fontWeight: 800 }}>
+              {v.prof.name}
+            </span>
             <span style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: C.ice }}>
               {v.prof.meta}
             </span>

@@ -8,6 +8,7 @@ export default function TabBar({ v }) {
         background: v.tabBarBg,
         borderTop: `1px solid ${v.tabBarLine}`,
         padding: '8px 8px 6px',
+        flexShrink: 0,
         flex: '0 0 auto',
       }}
     >
@@ -19,7 +20,8 @@ export default function TabBar({ v }) {
             flex: 1,
             background: 'none',
             border: 'none',
-            padding: '6px 0 4px',
+            padding: '7px 0 5px',
+            minHeight: 46,
             cursor: 'pointer',
             fontFamily: FONT,
             display: 'flex',

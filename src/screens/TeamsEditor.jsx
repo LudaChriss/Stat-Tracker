@@ -8,7 +8,7 @@ export default function TeamsEditor({ v, actions }) {
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div
         style={{
-          padding: '60px 16px 12px',
+          padding: 'var(--hdr-top) 16px 12px',
           display: 'flex',
           alignItems: 'center',
           gap: 10,

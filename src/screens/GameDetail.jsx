@@ -1,7 +1,7 @@
 import { C, btn, tnum } from '../theme.js';
 import { Card, RoundButton, Section, Sheet } from '../components/ui.jsx';
 
-const GRID = '1fr 34px 30px 30px 34px 46px';
+const GRID = 'minmax(0, 1fr) 30px 26px 26px 32px 44px';
 
 function BoxScore({ title, lines, totals }) {
   if (!lines.length) return null;
@@ -101,7 +101,7 @@ export default function GameDetail({ v, actions }) {
       <div
         style={{
           background: `linear-gradient(160deg,${C.header},${C.teal})`,
-          padding: '60px 16px 20px',
+          padding: 'var(--hdr-top) 16px 20px',
           color: '#fff',
         }}
       >
@@ -122,7 +122,7 @@ export default function GameDetail({ v, actions }) {
         >
           {g.dateLabel} · {g.sportLabel}
         </div>
-        <div style={{ fontSize: 24, fontWeight: 800, marginTop: 2 }}>
+        <div style={{ fontSize: 'clamp(19px, 5.8vw, 24px)', fontWeight: 800, marginTop: 2 }}>
           {g.homeAway} {g.opponent}
         </div>
 
@@ -139,7 +139,7 @@ export default function GameDetail({ v, actions }) {
           >
             {g.resultLabel}
           </span>
-          <span style={{ fontSize: 34, fontWeight: 800, lineHeight: 1, ...tnum }}>
+          <span style={{ fontSize: 'clamp(26px, 8vw, 34px)', fontWeight: 800, lineHeight: 1, ...tnum }}>
             {g.score}
           </span>
           <span style={{ fontSize: 12, fontWeight: 700, color: C.ice, paddingBottom: 4, ...tnum }}>

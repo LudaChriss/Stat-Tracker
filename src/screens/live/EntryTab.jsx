@@ -6,7 +6,8 @@ const pill = {
   border: 'none',
   color: '#fff',
   borderRadius: 9,
-  padding: '7px 11px',
+  padding: '0 11px',
+  minHeight: 42,
   fontSize: 12.5,
   fontWeight: 800,
   ...btn,
@@ -153,7 +154,7 @@ export default function EntryTab({ v, actions }) {
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       {/* Diamond + who's up */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 18px 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px 4px' }}>
         <Diamond b1={v.b1} b2={v.b2} b3={v.b3} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -209,7 +210,7 @@ export default function EntryTab({ v, actions }) {
       </div>
 
       {/* On deck / in the hole */}
-      <div style={{ display: 'flex', gap: 8, padding: '4px 18px 2px', overflowX: 'auto' }}>
+      <div style={{ display: 'flex', gap: 8, padding: '4px 14px 2px', overflowX: 'auto' }}>
         {v.onDeck.map((d) => (
           <div
             key={d.tag}
@@ -244,7 +245,8 @@ export default function EntryTab({ v, actions }) {
             border: '1.5px solid rgba(255,255,255,.25)',
             color: '#fff',
             borderRadius: 99,
-            padding: '6px 14px',
+            padding: '0 16px',
+            minHeight: 44,
             fontSize: 12.5,
             fontWeight: 800,
             flex: '0 0 auto',

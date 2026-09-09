@@ -5,10 +5,11 @@ const arrowBtn = {
   background: 'none',
   border: '1px solid rgba(255,255,255,.18)',
   color: C.pale,
-  borderRadius: 8,
-  width: 28,
-  height: 28,
-  fontSize: 11,
+  borderRadius: 9,
+  width: 40,
+  height: 40,
+  fontSize: 13,
+  flex: '0 0 auto',
   ...btn,
 };
 
@@ -36,8 +37,8 @@ export default function LineupTab({ v, actions }) {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 9,
-              padding: '8px 12px',
+              gap: 6,
+              padding: '8px 10px',
               borderTop: '1px solid rgba(255,255,255,.06)',
               background: p.bg,
             }}
@@ -47,20 +48,22 @@ export default function LineupTab({ v, actions }) {
             </span>
             <Avatar ini={p.ini} c={p.c} size={32} fs={12} onClick={p.goEntry} style={{ cursor: 'pointer' }} />
             <span onClick={p.goEntry} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
-              <span
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontWeight: 700,
-                  fontSize: 13.5,
-                  color: '#fff',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {p.name}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                {/* The name gets its own clipping context so the badge beside
+                    it is never the thing that gets cut off. */}
+                <span
+                  style={{
+                    fontWeight: 700,
+                    fontSize: 13.5,
+                    color: '#fff',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                  }}
+                >
+                  {p.name}
+                </span>
                 {p.upNow && (
                   <span
                     style={{
@@ -87,11 +90,13 @@ export default function LineupTab({ v, actions }) {
                 background: 'rgba(45,225,252,.12)',
                 border: '1px solid rgba(45,225,252,.3)',
                 color: C.cyan,
-                borderRadius: 8,
-                padding: '5px 9px',
-                fontSize: 11,
+                borderRadius: 9,
+                padding: '0 8px',
+                fontSize: 11.5,
                 fontWeight: 800,
-                minWidth: 48,
+                minWidth: 46,
+                height: 40,
+                flex: '0 0 auto',
                 ...btn,
               }}
             >
@@ -145,9 +150,10 @@ export default function LineupTab({ v, actions }) {
                     border: 'none',
                     color: '#fff',
                     borderRadius: 99,
-                    width: 30,
-                    height: 30,
-                    fontSize: 16,
+                    width: 40,
+                    height: 40,
+                    fontSize: 18,
+                    flex: '0 0 auto',
                     fontWeight: 800,
                     ...btn,
                   }}

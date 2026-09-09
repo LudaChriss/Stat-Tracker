@@ -1,15 +1,15 @@
 import { C, btn, tnum } from '../theme.js';
 import { Card, RoundButton } from '../components/ui.jsx';
 
-const STAT_GRID = '1fr 44px 44px 44px 44px';
+const STAT_GRID = 'minmax(0, 1fr) 48px 48px 48px 48px';
 
 const numInput = {
-  width: 38,
+  width: 44,
   justifySelf: 'center',
   textAlign: 'center',
   borderRadius: 8,
-  padding: '6px 0',
-  fontSize: 13.5,
+  padding: '10px 0',
+  fontSize: 16,
   fontWeight: 800,
   color: C.ink,
   ...tnum,
@@ -119,7 +119,7 @@ export default function ScanReview({ v, actions }) {
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div
         style={{
-          padding: '60px 16px 10px',
+          padding: 'var(--hdr-top) 16px 10px',
           display: 'flex',
           alignItems: 'center',
           gap: 10,

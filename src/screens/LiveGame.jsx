@@ -11,7 +11,7 @@ function Scoreboard({ v, actions }) {
     <div
       style={{
         background: `linear-gradient(180deg,#0A2540,${C.deep})`,
-        padding: '58px 16px 0',
+        padding: 'var(--hdr-top) 16px 0',
         borderBottom: '1px solid rgba(255,255,255,.07)',
       }}
     >
@@ -45,9 +45,11 @@ function Scoreboard({ v, actions }) {
             border: '1px solid rgba(255,255,255,.25)',
             color: '#fff',
             borderRadius: 99,
-            padding: '4px 10px',
+            padding: '0 12px',
+            minHeight: 40,
             fontSize: 11,
             fontWeight: 700,
+            flex: '0 0 auto',
             ...btn,
           }}
         >
@@ -64,9 +66,20 @@ function Scoreboard({ v, actions }) {
           gap: 8,
         }}
       >
-        <div style={{ textAlign: 'left' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: v.awayLabelColor }}>{v.opponentUpper}</div>
-          <div style={{ fontSize: 36, fontWeight: 800, lineHeight: 1, marginTop: 2, ...tnum }}>
+        <div style={{ textAlign: 'left', minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: v.awayLabelColor,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {v.opponentUpper}
+          </div>
+          <div style={{ fontSize: 'clamp(28px, 8.5vw, 36px)', fontWeight: 800, lineHeight: 1, marginTop: 2, ...tnum }}>
             {v.score.away}
           </div>
         </div>
@@ -100,8 +113,19 @@ function Scoreboard({ v, actions }) {
             OUTS
           </div>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: v.homeLabelColor }}>{v.myTeamUpper}</div>
+        <div style={{ textAlign: 'right', minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: v.homeLabelColor,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {v.myTeamUpper}
+          </div>
           <div style={{ fontSize: 36, fontWeight: 800, lineHeight: 1, marginTop: 2, ...tnum }}>
             {v.score.home}
           </div>
@@ -119,10 +143,10 @@ function Scoreboard({ v, actions }) {
               border: 'none',
               borderBottom: `2.5px solid ${t.line}`,
               color: t.fg,
-              padding: '8px 0 9px',
-              fontSize: 12,
+              padding: '13px 0 14px',
+              fontSize: 'clamp(10.5px, 3vw, 12px)',
               fontWeight: 800,
-              letterSpacing: '.08em',
+              letterSpacing: '.06em',
               ...btn,
             }}
           >

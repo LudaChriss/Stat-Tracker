@@ -12,7 +12,7 @@ export default function TeamDetail({ v, actions }) {
       <div
         style={{
           background: `linear-gradient(160deg,${C.header},${C.teal})`,
-          padding: '60px 16px 18px',
+          padding: 'var(--hdr-top) 16px 18px',
           color: '#fff',
         }}
       >
@@ -27,7 +27,8 @@ export default function TeamDetail({ v, actions }) {
               background: 'rgba(255,255,255,.14)',
               border: 'none',
               borderRadius: 99,
-              padding: '7px 14px',
+              padding: '0 16px',
+              minHeight: 42,
               fontSize: 12,
               fontWeight: 800,
               color: '#fff',
@@ -43,11 +44,11 @@ export default function TeamDetail({ v, actions }) {
         </div>
       </div>
 
-      <div style={{ padding: '16px 16px 4px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+      <div style={{ padding: '10px 16px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Section style={{ marginBottom: 0 }}>Their roster</Section>
         <button
           onClick={actions.openPlayerEditor(team.id, null)}
-          style={{ background: 'none', border: 'none', color: C.teal, fontSize: 12.5, fontWeight: 800, ...btn }}
+          style={{ background: 'none', border: 'none', color: C.teal, fontSize: 12.5, fontWeight: 800, minHeight: 44, padding: '0 6px', ...btn }}
         >
           + Add player
         </button>

@@ -341,7 +341,7 @@ export function deriveView(s, actions) {
             return t.gp ? `${t.avg} AVG · ${t.ops} OPS` : 'No games yet';
           })(),
       upNow,
-      upTag: upNow ? 'UP NOW ›' : '',
+      upTag: upNow ? 'UP' : '',
       goEntry: upNow ? actions.setLiveTab('entry') : actions.noop,
       bg: upNow ? 'rgba(45,225,252,.1)' : 'transparent',
       openPos: actions.openPosMenu(p.id),

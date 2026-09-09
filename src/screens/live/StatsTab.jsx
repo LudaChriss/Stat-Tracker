@@ -1,7 +1,7 @@
 import { C, btn, tnum } from '../../theme.js';
 import { DarkCard } from '../../components/ui.jsx';
 
-const GRID = '1fr 36px 32px 32px 36px 46px';
+const GRID = 'minmax(0, 1fr) 30px 26px 26px 32px 44px';
 
 export default function StatsTab({ v, actions }) {
   return (
@@ -25,9 +25,12 @@ export default function StatsTab({ v, actions }) {
             border: 'none',
             color: v.shFg,
             borderRadius: 9,
-            padding: '8px 0',
-            fontSize: 12,
+            padding: '13px 4px',
+            fontSize: 'clamp(10px, 2.9vw, 12px)',
             fontWeight: 800,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
             ...btn,
           }}
         >
@@ -41,9 +44,12 @@ export default function StatsTab({ v, actions }) {
             border: 'none',
             color: v.saFg,
             borderRadius: 9,
-            padding: '8px 0',
-            fontSize: 12,
+            padding: '10px 4px',
+            fontSize: 'clamp(10px, 2.9vw, 12px)',
             fontWeight: 800,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
             ...btn,
           }}
         >

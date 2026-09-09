@@ -36,27 +36,32 @@ const SCREENS = {
 // Screens that paint their own dark chrome need the status bar in white.
 const DARK_SCREENS = ['live', 'scanCam'];
 
-/**
- * True when launched from the home screen. Installed, the phone *is* the
- * frame, so the simulated bezel is dropped and the app runs full-bleed.
- */
-function useStandalone() {
-  const [standalone, setStandalone] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return (
-      window.matchMedia('(display-mode: standalone)').matches ||
-      window.navigator.standalone === true
-    );
-  });
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(query).matches,
+  );
 
   useEffect(() => {
-    const mq = window.matchMedia('(display-mode: standalone)');
-    const onChange = (e) => setStandalone(e.matches || window.navigator.standalone === true);
+    const mq = window.matchMedia(query);
+    const onChange = (e) => setMatches(e.matches);
+    setMatches(mq.matches);
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
-  }, []);
+  }, [query]);
 
-  return standalone;
+  return matches;
+}
+
+/**
+ * Drop the simulated bezel whenever the real screen is the frame: installed to
+ * a home screen, or any viewport too narrow to show a 402px phone inside it.
+ * Anything wider keeps the bezel as a desktop preview.
+ */
+function useFullBleed() {
+  const installed = useMediaQuery('(display-mode: standalone)');
+  const narrow = useMediaQuery('(max-width: 560px)');
+  const iosStandalone = typeof window !== 'undefined' && window.navigator.standalone === true;
+  return installed || iosStandalone || narrow;
 }
 
 export default function App() {
@@ -64,10 +69,11 @@ export default function App() {
   const v = useMemo(() => deriveView(state, actions), [state, actions]);
 
   const Screen = SCREENS[state.screen];
-  const standalone = useStandalone();
+  const fullBleed = useFullBleed();
 
   const app = (
     <div
+      className="app-shell"
       style={{
         position: 'relative',
         height: '100%',
@@ -77,8 +83,8 @@ export default function App() {
         fontFamily: FONT,
         color: C.ink,
         overflow: 'hidden',
-        // Installed, content runs under the home indicator without this.
-        paddingBottom: standalone ? 'env(safe-area-inset-bottom)' : 0,
+        // Keeps content clear of the home indicator when installed.
+        paddingBottom: 'var(--safe-bottom)',
       }}
     >
       <Screen v={v} actions={actions} />
@@ -95,7 +101,7 @@ export default function App() {
     </div>
   );
 
-  if (standalone) return <div className="stage">{app}</div>;
+  if (fullBleed) return <div className="stage is-fullbleed">{app}</div>;
 
   return (
     <div className="stage">

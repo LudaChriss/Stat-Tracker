@@ -35,10 +35,10 @@ const pager = {
   background: 'none',
   border: '1px solid rgba(255,255,255,.2)',
   color: C.pale,
-  borderRadius: 8,
-  width: 28,
-  height: 28,
-  fontSize: 12,
+  borderRadius: 10,
+  width: 42,
+  height: 42,
+  fontSize: 15,
   ...btn,
 };
 
@@ -53,7 +53,18 @@ export default function BookTab({ v }) {
           marginBottom: 10,
         }}
       >
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', color: C.muted }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: '.08em',
+            color: C.muted,
+            minWidth: 0,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
           SCOREBOOK · {v.myTeamUpper}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -70,7 +81,7 @@ export default function BookTab({ v }) {
       </div>
 
       <DarkCard style={{ padding: '10px 8px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 54px 54px 54px', alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 46px 46px 46px', alignItems: 'center' }}>
           <span
             style={{
               fontSize: 9,

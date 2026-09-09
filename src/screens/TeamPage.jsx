@@ -1,7 +1,19 @@
 import { C, btn, tnum } from '../theme.js';
 import { Avatar, Card, Section } from '../components/ui.jsx';
 
-const ROSTER_GRID = '1fr 48px 48px 52px';
+// Text-only buttons still need a finger-sized hit box.
+const textBtn = {
+  background: 'none',
+  border: 'none',
+  color: C.teal,
+  fontSize: 12,
+  fontWeight: 700,
+  minHeight: 44,
+  padding: '0 8px',
+  ...btn,
+};
+
+const ROSTER_GRID = 'minmax(0, 1fr) 46px 46px 50px';
 
 export default function TeamPage({ v, actions }) {
   return (
@@ -9,7 +21,7 @@ export default function TeamPage({ v, actions }) {
       <div
         style={{
           background: `linear-gradient(160deg,${C.header},${C.teal})`,
-          padding: '64px 20px 18px',
+          padding: 'var(--hdr-top) 20px 18px',
           color: '#fff',
         }}
       >
@@ -37,7 +49,7 @@ export default function TeamPage({ v, actions }) {
             MANAGER
           </span>
         </div>
-        <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-.01em', marginTop: 2 }}>
+        <div style={{ fontSize: 'clamp(20px, 6vw, 24px)', fontWeight: 800, letterSpacing: '-.01em', marginTop: 2 }}>
           {v.myTeamName}
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.ice, marginTop: 2, ...tnum }}>
@@ -103,23 +115,23 @@ export default function TeamPage({ v, actions }) {
       {/* Roster */}
       <div
         style={{
-          padding: '16px 16px 4px',
+          padding: '10px 16px 4px',
           display: 'flex',
-          alignItems: 'baseline',
+          alignItems: 'center',
           justifyContent: 'space-between',
         }}
       >
         <Section style={{ marginBottom: 0 }}>Roster</Section>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           <button
             onClick={actions.toggleStatSet}
-            style={{ background: 'none', border: 'none', color: C.teal, fontSize: 12, fontWeight: 700, ...btn }}
+            style={{ ...textBtn }}
           >
             {v.statSetLabel} ⇄
           </button>
           <button
             onClick={actions.goRoster}
-            style={{ background: 'none', border: 'none', color: C.teal, fontSize: 12, fontWeight: 700, ...btn }}
+            style={{ ...textBtn }}
           >
             Manage ›
           </button>
@@ -196,7 +208,8 @@ export default function TeamPage({ v, actions }) {
             border: `1.5px dashed ${C.edge}`,
             color: C.muted,
             borderRadius: 12,
-            padding: 10,
+            padding: 12,
+            minHeight: 44,
             fontSize: 12.5,
             fontWeight: 700,
             ...btn,

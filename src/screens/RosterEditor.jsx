@@ -10,7 +10,7 @@ export default function RosterEditor({ v, actions }) {
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div
         style={{
-          padding: '60px 16px 12px',
+          padding: 'var(--hdr-top) 16px 12px',
           display: 'flex',
           alignItems: 'center',
           gap: 10,
@@ -33,7 +33,8 @@ export default function RosterEditor({ v, actions }) {
             background: C.bg,
             border: 'none',
             borderRadius: 99,
-            padding: '8px 13px',
+            padding: '0 15px',
+            minHeight: 42,
             fontSize: 12.5,
             fontWeight: 800,
             color: C.header,
