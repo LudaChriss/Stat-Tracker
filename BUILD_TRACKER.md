@@ -41,7 +41,15 @@ were exercised in the browser; the failure paths were not.
 
 Nothing from 1f. Phase 2 not started, as instructed.
 
-Two known limits, both scoped to later phases and neither blocking:
+**Read this one before you score a real game.** A game finalised *after* you
+sign in is not written to the backend yet — `save_season` covers the team and
+roster only, and game history reaches the backend solely through the one-time
+import. It is not lost: it stays on the phone, stays exportable, and the next
+launch notices the device and the account disagree and asks you rather than
+silently choosing. But until phase 3 the phone is the only copy of a new game.
+Export after a game, as you would have anyway.
+
+Two further limits, both scoped to later phases and neither blocking:
 - The backend does not yet store the batting order or the bench — those stay on
   the device. Fine for one scorer; phase 4 needs them shared.
 - An import makes you manager of the opposing teams it creates. Correct for a
@@ -204,11 +212,14 @@ only ever go up.
 | 1e | "Import my existing data": export JSON → backend as my team | **green** |
 | 1f | Wire the app to the repository; localStorage demoted to offline cache/queue | **green** |
 
+Phase 1 complete: 1a–1f all green, verified against a real database and, for
+the whole sign-in → migrate → offline → replay flow, in a real browser.
+
 ## Phase 2 — Accounts and roles
 
 | Slice | Description | Status |
 |---|---|---|
-| 2a | Email magic-link sign in, session handling, signed-out state | todo |
+| 2a | Sign-in itself is **done** — email + 6-digit code, built in 1f (a link opens in Safari, not the installed app). Remaining: signed-out empty state, session expiry and refresh failure, and a sign-out control | todo |
 | 2b | Roles: league admin, team manager, team scorer, viewer | todo |
 | 2c | Invite flow: manager generates a link/code, invitee lands in the right team+role | todo |
 
@@ -243,9 +254,9 @@ only ever go up.
 | Slice | Description | Status |
 |---|---|---|
 | 6a | Full regression across all phases on iPhone viewports | todo |
-| 6b | Offline: scorer loses signal mid-game, queue and recover | todo |
+| 6b | Offline behaviour | **partial**. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Remaining: offline *mid-game* (that is the event log, phase 3), surfacing parked writes in the UI, and the recovery flow for them |
 | 6c | Error boundaries, empty states, loading states everywhere data is fetched | todo |
-| 6d | Export/import against the backend | todo |
+| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Remaining: **game history is not written back yet** — `save_season` covers team and roster only — so a game finalised after signing in stays on the device until phase 3 |
 
 ---
 
