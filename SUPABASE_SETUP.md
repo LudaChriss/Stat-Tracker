@@ -25,6 +25,12 @@ disabled in `supabase/config.toml` — unused here, and they broke startup.
 
 ---
 
+> **ORDER MATTERS.** Create the project and push the schema *before* pointing
+> the app at it. Redeploying with env vars set but no schema means the first
+> person to open the app hits errors against an empty database. The full,
+> ordered checklist lives in `BUILD_TRACKER.md` §4 — this file is the detail
+> behind each step.
+
 ## 1. Create the project
 
 1. Go to <https://supabase.com/dashboard> and sign in (GitHub sign-in is fine).

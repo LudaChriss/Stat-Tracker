@@ -49,37 +49,102 @@ Two known limits, both scoped to later phases and neither blocking:
 
 ## 4. Deploy checklist, in order
 
-1. **Vercel → Settings → Environment Variables.** Add both to Production,
-   Preview and Development:
-   - `VITE_SUPABASE_URL` — `https://xxxxx.supabase.co`
-   - `VITE_SUPABASE_ANON_KEY` — the **anon** key, never `service_role`
-2. **Redeploy.** Vite bakes these in at build time; an existing deployment will
-   not pick them up. If you skip this the app will show a screen naming the
-   missing variables — by design.
-3. **Push the schema:**
-   ```
-   npx supabase login
-   npx supabase link --project-ref xxxxx
-   npx supabase db push
-   ```
-4. ⚠️ **Change the sign-in email template. THIS IS THE STEP THAT SILENTLY BREAKS
-   SIGN-IN IF SKIPPED.** Without it the email contains a link and no code; the
-   link opens in Safari, so the installed app stays signed out and there is
-   nothing to type in. Nothing will say why.
-   - Supabase dashboard → **Authentication → Email Templates → Magic Link**
-   - Replace the body with:
-     ```
-     <h2>Your sign-in code</h2>
-     <p>Enter this code in the app:</p>
-     <p style="font-size:28px;font-weight:800;letter-spacing:.18em">{{ .Token }}</p>
-     ```
-   - The key part is `{{ .Token }}` instead of `{{ .ConfirmationURL }}`. Save.
-   - Also **Authentication → URL Configuration**: set Site URL to your Vercel
-     URL and add `https://<your-app>.vercel.app/**` to Redirect URLs.
-5. **First sign-in on your phone.** Open the deployed URL in Safari, Share →
-   Add to Home Screen, open it from the home screen, enter your email, then the
-   6-digit code. Your local season migrates up and is verified before the device
-   stops being the source of truth.
+Nothing below has been done. There is no hosted Supabase project yet, the CLI
+has never been linked to one, and none of the 12 migrations have been applied
+anywhere except the local Docker stack. `.env.local` points at localhost.
+
+**The order matters.** The database must exist and have the schema *before* the
+app is pointed at it, or the first person to open the deployed app hits errors
+against an empty database.
+
+### 1. Create the Supabase project
+
+Dashboard → **New project**. Save the database password somewhere; it cannot be
+recovered, only reset. Pick the region closest to where you play — that is the
+single biggest factor in how snappy live scoring feels. Free tier is ample.
+
+Wait for provisioning (~2 min).
+
+### 2. Push the schema — BEFORE the app points at it
+
+From the repo root:
+
+```bash
+npx supabase login                      # opens a browser
+npx supabase link --project-ref xxxxx   # the xxxxx from https://xxxxx.supabase.co
+npx supabase db push
+```
+
+That applies all 12 migrations: the tables, all 27 row-level security policies,
+and these 11 functions —
+
+`handle_new_user`, `create_team_with_manager`, `create_league_with_admin`,
+`claim_primary_team`, `set_primary_team`, `league_is_readable`,
+`fill_game_team_snapshots`, `import_season`, `import_season_and_claim`,
+`discard_import`, `save_season`.
+
+`db push` will list what it is about to apply and ask to confirm. It only ever
+applies migrations the remote has not seen.
+
+### 3. Check the push actually landed
+
+Dashboard → **SQL Editor**, run:
+
+```sql
+select count(*) as tables from pg_tables where schemaname = 'public';
+select count(*) as policies from pg_policies where schemaname = 'public';
+select count(*) as functions from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.prosecdef;
+```
+
+Expect **9 tables, 27 policies, 11 security-definer functions**. If any number
+is short, stop — the app will half-work in confusing ways rather than fail
+cleanly.
+
+### 4. ⚠️ Change the sign-in email template — THE STEP THAT SILENTLY BREAKS SIGN-IN
+
+Skip this and sign-in fails with nothing explaining why: the email arrives with
+a link and no code, the link opens in Safari rather than the installed app, so
+the app itself stays signed out and there is nothing to type in.
+
+Dashboard → **Authentication → Email Templates → Magic Link**. Replace the body:
+
+```html
+<h2>Your sign-in code</h2>
+<p>Enter this code in the app:</p>
+<p style="font-size:28px;font-weight:800;letter-spacing:.18em">{{ .Token }}</p>
+<p>It expires in an hour. If you didn't ask for it, ignore this email.</p>
+```
+
+The part that matters is `{{ .Token }}` where `{{ .ConfirmationURL }}` was. Save.
+
+Then **Authentication → URL Configuration**:
+- **Site URL:** your Vercel URL
+- **Redirect URLs:** add `https://<your-app>.vercel.app/**`
+
+### 5. Vercel environment variables
+
+**Settings → Environment Variables**, add both to Production, Preview and
+Development:
+
+- `VITE_SUPABASE_URL` — `https://xxxxx.supabase.co`
+- `VITE_SUPABASE_ANON_KEY` — the **anon** key, never `service_role`
+
+### 6. Redeploy
+
+Vite bakes these in at build time, so an existing deployment will not pick them
+up. Skip this and the app shows a screen naming the missing variables — that is
+deliberate, and it is the failure you want rather than an empty season.
+
+### 7. First sign-in on your phone
+
+Open the deployed URL in Safari → Share → **Add to Home Screen** → open it from
+the home screen. Enter your email, then the 6-digit code.
+
+Your local season migrates up and is verified before the device stops being the
+source of truth. If verification fails, the upload is removed and the phone
+stays in charge — you will see a message saying so.
 
 ## 5. Before you push
 
@@ -90,8 +155,8 @@ Two known limits, both scoped to later phases and neither blocking:
   will not be pushed, but do not copy it to Vercel.
 - Confirm `git log` looks right: 20 commits, latest `Phase 1f: sign in,
   migrate, and keep writing offline`.
-- Nothing was changed in any hosted Supabase project. Step 4 above is the only
-  thing that needs your hands.
+- Nothing has been applied to any hosted Supabase project — there is not one
+  yet. Every step in §4 needs your hands, in that order.
 
 ---
 
