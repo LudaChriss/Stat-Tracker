@@ -28,6 +28,10 @@ export function createLocalRepository() {
       return readState(INITIAL_STATE);
     },
 
+    // On this device the game is already in the season that save() persists;
+    // there is nowhere else to put it.
+    saveGame() {},
+
     save(state) {
       saveState(state);
     },

@@ -273,6 +273,9 @@ export function useGame(injectedRepository) {
           liveTab: 'entry',
           synced: false,
         }));
+        // Push the finished game on its own, separately from the debounced
+        // season snapshot: a game is an append and must not be coalesced away.
+        if (repository.saveGame) repository.saveGame(record);
         toast('Game finalized · standings updated', 3000);
         markUnsynced();
       },

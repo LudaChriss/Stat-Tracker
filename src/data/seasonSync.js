@@ -155,3 +155,53 @@ function tallySafe(season) {
     return {};
   }
 }
+
+/**
+ * Did one finalized game land intact?
+ *
+ * Compares what the app would SHOW for that game — the result and score from
+ * our point of view, and every player's line — rather than row counts. The
+ * perspective flip between the device and the row is where results have
+ * silently inverted before, and a row count cannot see it.
+ */
+export function verifyGame(local, remote) {
+  if (!remote) {
+    return { ok: false, differences: ['the game did not read back from the backend'] };
+  }
+
+  const differences = [];
+  if (remote.result !== local.result) {
+    differences.push(`result: ${local.result} here, ${remote.result} in the account`);
+  }
+  if (remote.score?.us !== local.score?.us || remote.score?.them !== local.score?.them) {
+    differences.push(
+      `score: ${local.score?.us}-${local.score?.them} here, ${remote.score?.us}-${remote.score?.them} in the account`,
+    );
+  }
+  if (remote.home !== local.home) {
+    differences.push(`home/away: ${local.home ? 'home' : 'away'} here, ${remote.home ? 'home' : 'away'} in the account`);
+  }
+
+  const key = (l) => l.pid;
+  const localLines = new Map((local.lines || []).map((l) => [key(l), l]));
+  const remoteLines = new Map((remote.lines || []).map((l) => [key(l), l]));
+
+  if (localLines.size !== remoteLines.size) {
+    differences.push(`box score: ${localLines.size} lines here, ${remoteLines.size} in the account`);
+  }
+
+  const fields = ['ab', 'h', 'r', 'rbi', 'bb', 'k', 'd', 't', 'hr'];
+  for (const [pid, l] of localLines) {
+    const r = remoteLines.get(pid);
+    if (!r) {
+      differences.push(`${l.name || pid}: missing from the account`);
+      continue;
+    }
+    const off = fields.filter((f) => (l[f] || 0) !== (r[f] || 0));
+    if (off.length) {
+      differences.push(`${l.name || pid}: ${off.map((f) => `${f} ${l[f] || 0} vs ${r[f] || 0}`).join(', ')}`);
+    }
+  }
+
+  return { ok: differences.length === 0, differences };
+}

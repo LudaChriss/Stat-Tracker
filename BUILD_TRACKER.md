@@ -1,6 +1,10 @@
 # Morning report — Phase 1 is green
 
-All six slices done. **589 assertions, 20 suites, build clean, viewport audit clean.**
+All six slices done, plus one slice pulled forward from phase 3: **a game
+finalised on the phone is now written to the account.**
+
+**636 assertions, 22 suites, build clean, viewport audit clean** (56
+screen×viewport combinations, no overflow, no tap target under 44px).
 Nothing is blocked. Do not push before reading §5.
 
 ## 1. Built, and how far it was verified
@@ -11,8 +15,19 @@ renamed the team offline, restored the network, and watched the write replay to
 the account. Queue drained, nothing parked, edit survived a reload, still signed
 in, no console errors.
 
-**Verified against the real database (not the browser)**: schema, all 27 RLS
-policies, the import, `discard_import`, and the adversarial attack suite.
+**Also verified in a real browser, end to end** (`test/browser-save-game.mjs`,
+run three times over to prove it is not timing luck): tapped "Game completed"
+and "Finalize" in the actual UI, then looked in Postgres — the game is there,
+final, with our score on the right side, the result not inverted, the whole box
+score attached and every line of ours linked to a real player rather than just a
+name. Then local storage was wiped and the game still came back from the
+account. Then the network was cut, a second game was finalised offline, and it
+was queued rather than lost; restoring the network delivered it, and it verified
+on read-back too.
+
+**Verified against the real database (not the browser)**: schema, all 26 RLS
+policies, the import, `discard_import`, `save_season`'s empty-roster guard,
+`save_game`'s four refusals, and the adversarial attack suite.
 
 **Verified in tests only**: the offline queue's parked/permanent-failure paths,
 the sync-decision branches, and the config-error screen. The happy paths of each
@@ -41,25 +56,37 @@ were exercised in the browser; the failure paths were not.
 
 Nothing from 1f. Phase 2 not started, as instructed.
 
-**Read this one before you score a real game.** A game finalised *after* you
-sign in is not written to the backend yet — `save_season` covers the team and
-roster only, and game history reaches the backend solely through the one-time
-import. It is not lost: it stays on the phone, stays exportable, and the next
-launch notices the device and the account disagree and asks you rather than
-silently choosing. But until phase 3 the phone is the only copy of a new game.
-Export after a game, as you would have anyway.
+Nothing from the pulled-forward `save_game` slice either — see "What was
+pulled forward" below for what it deliberately does *not* do.
+
+**One thing to know before you score a real game.** Games you finalise from now
+on are written to the account. Games already in your history are **not** —
+`save_game` fires on finalisation, and there is no backfill for games that were
+finalised before this. They are not lost: they stay on the phone, they stay in
+the standings, and they stay exportable. See §6 for the recommendation on that.
 
 Two further limits, both scoped to later phases and neither blocking:
 - The backend does not yet store the batting order or the bench — those stay on
   the device. Fine for one scorer; phase 4 needs them shared.
+- A game in progress is still device-only. Only the *finished* game is written,
+  as a unit. Lose the phone mid-game and the game is gone; that is phase 3a.
 - An import makes you manager of the opposing teams it creates. Correct for a
   solo season; phase 4 will need league-owned teams to supersede them.
 
 ## 4. Deploy checklist, in order
 
-Nothing below has been done. There is no hosted Supabase project yet, the CLI
-has never been linked to one, and none of the 12 migrations have been applied
-anywhere except the local Docker stack. `.env.local` points at localhost.
+**Where this actually stands now** (steps 1-3 are done; 2 needs running again):
+
+- The Supabase project exists and the CLI is linked to it.
+- Migrations `_000` through `_011` are on it — you pushed them and the counts
+  checked out.
+- **Migrations `_012` and `_013` exist only locally.** `_012` is the fix that
+  stops `save_season` wiping a roster; `_013` is `save_game`. Until you push
+  them, finalising a game does nothing on the hosted project and the roster
+  guard is not in place. Run step 2 again.
+- Steps 4-7 have not been done at all.
+
+`.env.local` points at localhost and must stay that way.
 
 **The order matters.** The database must exist and have the schema *before* the
 app is pointed at it, or the first person to open the deployed app hits errors
@@ -83,16 +110,17 @@ npx supabase link --project-ref xxxxx   # the xxxxx from https://xxxxx.supabase.
 npx supabase db push
 ```
 
-That applies all 12 migrations: the tables, all 27 row-level security policies,
-and these 11 functions —
+There are now **14 migrations**; `db push` applies only the ones the remote has
+not seen, which on your project means `_012` and `_013`. In total they build the
+tables, all 26 row-level security policies, and these functions —
 
 `handle_new_user`, `create_team_with_manager`, `create_league_with_admin`,
 `claim_primary_team`, `set_primary_team`, `league_is_readable`,
 `fill_game_team_snapshots`, `import_season`, `import_season_and_claim`,
-`discard_import`, `save_season` — plus the eight RLS helpers
+`discard_import`, `save_season`, `save_game` — plus the eight RLS helpers
 `is_team_member`, `is_league_admin`, `is_league_member`, `can_manage_team`,
 `can_score_game`, `can_score_teams`, `game_is_readable` and `accept_invite`,
-which is 19 security-definer functions in all.
+which is 20 security-definer functions in all.
 
 `db push` will list what it is about to apply and ask to confirm. It only ever
 applies migrations the remote has not seen.
@@ -109,10 +137,26 @@ select count(*) as functions from pg_proc p
   where n.nspname = 'public' and p.prosecdef;
 ```
 
-Expect **9 tables, 26 policies, 19 security-definer functions** (20 public
-functions in total — the 20th, `set_updated_at`, is a plain trigger function).
-If any number is short, stop — the app will half-work in confusing ways rather
-than fail cleanly.
+Expect **9 tables, 26 policies, 20 security-definer functions** (21 public
+functions in total — the extra one, `set_updated_at`, is a plain trigger
+function). If any number is short, stop — the app will half-work in confusing
+ways rather than fail cleanly.
+
+Those three numbers are what the local database actually reports after all 14
+migrations, read out of `pg_tables` / `pg_policies` / `pg_proc` rather than
+counted from the migration files. **19 was the right answer before `save_game`;
+20 is the right answer after it.** If you see 19, `_013` did not apply.
+
+One more worth checking, because the same mistake has bitten twice:
+
+```sql
+select proname, pg_get_function_arguments(oid) from pg_proc
+  where proname in ('save_season','save_game');
+```
+
+Exactly two rows. Two rows for the same name means an old overload survived and
+calls may be resolving to the wrong one — which is how `_012` silently failed
+the first time.
 
 Two of those numbers were wrong in an earlier version of this checklist, and
 both errors are worth remembering:
@@ -180,10 +224,38 @@ stays in charge — you will see a message saying so.
   tries — but you have one copy of a real season and this is a large change.
 - `.env.local` currently points at the **local** stack. It is gitignored, so it
   will not be pushed, but do not copy it to Vercel.
-- Confirm `git log` looks right: 20 commits, latest `Phase 1f: sign in,
-  migrate, and keep writing offline`.
-- Nothing has been applied to any hosted Supabase project — there is not one
-  yet. Every step in §4 needs your hands, in that order.
+- Confirm `git log` looks right: 28 commits, latest `Write a finalized game to
+  the backend`.
+- The hosted project has migrations `_000`-`_011`. **`_012` and `_013` are not
+  on it.** Push the code, then run §4 step 2 — in that order does not matter
+  here, but a game finalised before `_013` lands will sit in the queue rather
+  than reach the account. It will not be lost; it replays.
+
+## 6. Recommended next, not built: a backfill for older games
+
+`save_game` fires when a game is finalised. Games already in your history when
+it shipped were never offered to it, so they stay on the device. That is not a
+bug and nothing is lost — they are in the standings, in the box scores, and in
+an export — but the account does not have them.
+
+**Recommendation: a one-tap "Send past games to my account" in Manage roster,
+next to Export.** It would walk the local history, skip anything already in
+`score-tracker:syncedGames`, and enqueue the rest through exactly the path a
+freshly finalised game takes. No new database function: `save_game` is already
+idempotent by `(created_by, client_id)`, so running it twice is harmless, and it
+already refuses anything that does not look like a finished game.
+
+Deliberately **not** built now, for two reasons:
+
+- It writes many games at once against a guard whose refusals have been
+  exercised on one game at a time. A batch that half-succeeds needs its own
+  answer, and inventing one at the end of a slice is how the roster got wiped.
+- You have one real season and it has already been through a data-loss scare.
+  A bulk write into the account is exactly the operation to do deliberately,
+  with an export in hand, not as an afterthought.
+
+If you want it, it is small — an afternoon, most of it tests for the partial
+failure case.
 
 ---
 
@@ -250,6 +322,31 @@ the whole sign-in → migrate → offline → replay flow, in a real browser.
 | 3b | Realtime subscription; two phones on one game stay in sync | todo |
 | 3c | Concurrency: chosen strategy documented and tested | todo |
 | 3d | Cancel / undo / finalize correct in the shared model | todo |
+| — | **Pulled forward: a finalized game is written to the backend** | **green** |
+
+### What was pulled forward, and what it is not
+
+The phase 3 design is an append-only event log with live state derived by
+replay. That is still the design. What was pulled forward is only the *end* of
+it: when a game is marked final, the finished game and its box score are written
+to the account as a unit, so the phone stops being the only copy.
+
+This was worth doing out of order because the gap it closes is data loss on a
+lost or reinstalled phone, and it needs none of the machinery below.
+
+**Deferred, explicitly** — none of this is in the slice:
+
+- **The event log (3a).** Nothing is written while a game is in progress. The
+  write happens once, on finalisation.
+- **Live shared scoring (3b).** No realtime subscription; a second phone sees
+  nothing until the game is final and it reloads.
+- **Concurrency (3c).** One scorer per game is assumed. Two phones scoring the
+  same game would each write their own version; the second wins, because the
+  upsert is keyed on `(created_by, client_id)` and their client ids differ.
+- **Undo and cancel in the shared model (3d).** Undo and cancel work on the
+  device exactly as before, but a game already written to the account is not
+  reopened, retracted or deleted by them.
+- **Backfill.** Games finalised before this exist only on the device.
 
 ## Phase 4 — Multi-team and multi-league
 
@@ -273,9 +370,9 @@ the whole sign-in → migrate → offline → replay flow, in a real browser.
 | Slice | Description | Status |
 |---|---|---|
 | 6a | Full regression across all phases on iPhone viewports | todo |
-| 6b | Offline behaviour | **partial**. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Remaining: offline *mid-game* (that is the event log, phase 3), surfacing parked writes in the UI, and the recovery flow for them |
+| 6b | Offline behaviour | **partial**. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Extended since: a game finalised with the network cut is queued, not lost, and is delivered on reconnect — verified in a browser. Remaining: offline *mid-game* (that is the event log, phase 3), surfacing parked writes in the UI, and the recovery flow for them |
 | 6c | Error boundaries, empty states, loading states everywhere data is fetched | todo |
-| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Remaining: **game history is not written back yet** — `save_season` covers team and roster only — so a game finalised after signing in stays on the device until phase 3 |
+| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Done in the pulled-forward phase 3 slice: a game finalised while signed in is written to the account and verified on read-back. Remaining: **no backfill** for games finalised before that slice — they stay on the device |
 
 ---
 
@@ -344,6 +441,33 @@ function that creates the row and the creator's membership together, so a team
 without a manager or a league without an admin is unreachable. This also closes
 the privilege-escalation route: there is no INSERT policy on `memberships` at
 all, and the only other way to gain one is `accept_invite`.
+
+### D8 — A finalized game is written whole, and refused rather than half-saved
+
+Three choices in `save_game`, each from something that has already gone wrong
+here:
+
+- **Idempotent by `(created_by, client_id)`.** The write goes through the
+  offline queue and will be retried after a timeout that actually succeeded. A
+  duplicated game silently corrupts the standings, which is worse than a failed
+  write. The unique index backing this is deliberately *not* partial: a partial
+  index cannot back `ON CONFLICT`, which is how the roster upsert failed
+  silently for a whole day.
+- **It refuses rather than accepts.** A game with no id, no box-score lines, no
+  score, or a result contradicting its score is rejected by name. `save_season`
+  quietly accepted an empty roster and deleted ten players; a guard that names
+  what it is refusing is the lesson from that. A 0-0 tie is legitimate and is
+  accepted.
+- **Written, then read back and compared.** After the write, the season is
+  fetched and the game compared on the figures the app would *show* — result and
+  score from our point of view, and every player's line. Not a row count: a row
+  count cannot see an away result arriving inverted, which has happened. If the
+  comparison fails the game is not marked synced, the device copy stays
+  authoritative, and the write is parked where it can be seen.
+
+The game is written **without a coalesce key**, unlike a season snapshot. A
+season snapshot supersedes the previous one; a game is an append and must never
+be coalesced away by a save that happens to follow it.
 
 ### D3 — League visibility is a column, not an assumption
 

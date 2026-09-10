@@ -19,8 +19,32 @@
 
 import { rowsToSeason, seasonToRows } from './seasonMapping.js';
 import { createOfflineQueue } from './offlineQueue.js';
+import { verifyGame } from './seasonSync.js';
 
 const SAVE_DEBOUNCE_MS = 1200;
+const SYNCED_GAMES_KEY = 'score-tracker:syncedGames';
+
+// A per-game marker rather than a timestamp: clocks differ between devices,
+// and "everything after time T" is the wrong question once there is more than
+// one phone. Games finalised before this existed are simply absent from the
+// set and are never uploaded automatically.
+function readSyncedGames() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SYNCED_GAMES_KEY) || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+
+function markGameSynced(id) {
+  try {
+    const all = readSyncedGames();
+    all.add(id);
+    localStorage.setItem(SYNCED_GAMES_KEY, JSON.stringify([...all]));
+  } catch {
+    /* best effort: the game is written either way */
+  }
+}
 
 /**
  * @param {object} client   a supabase-js client
@@ -39,6 +63,11 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
   const handlers = {
     season: async (payload) => {
       await writeSeason(payload);
+    },
+    // A finalized game is an append, not a snapshot. It is enqueued without a
+    // coalesceKey so a later season save can never supersede it.
+    game: async (record) => {
+      await writeGame(record);
     },
   };
 
@@ -114,7 +143,47 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
   }
 
 
+  /**
+   * Write one finalized game, then read it back and check the figures the app
+   * would show. A row count would not notice the result arriving inverted,
+   * which has happened.
+   */
+  async function writeGame(record) {
+    const teamId = getTeamId();
+    if (!teamId) return;
+
+    const { error } = await client.rpc('save_game', { p_team_id: teamId, payload: record });
+    if (error) throw error;
+
+    const season = await fetchSeason(teamId);
+    const readBack = (season && season.history ? season.history : []).find((g) => g.id === record.id);
+    const verdict = verifyGame(record, readBack);
+
+    if (!verdict.ok) {
+      // Not marked synced: the device copy stays authoritative and the queue
+      // parks this where it can be seen.
+      const err = new Error(
+        `the game read back differently from the account (${verdict.differences.join('; ')})`,
+      );
+      err.permanent = true;
+      throw err;
+    }
+
+    markGameSynced(record.id);
+  }
+
   return {
+    /** Persist one finalized game. Only ever called on finalization. */
+    saveGame(record) {
+      if (!record || !record.id) return;
+      // No coalesceKey: every finalized game must be replayed on its own.
+      writes.enqueue({ kind: 'game', payload: record });
+      flushQueue().catch(() => {});
+    },
+
+    /** Which games this device has confirmed are in the account. */
+    syncedGames: () => readSyncedGames(),
+
     // The local mirror reads synchronously, so the first paint shows the last
     // known season instead of a blank screen while the network load runs.
     // useGame replaces it with the authoritative copy when that arrives.
