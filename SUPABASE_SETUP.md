@@ -5,6 +5,24 @@ or to use the app across more than one device). Local development does not need
 it — `npx supabase start` runs the whole stack in Docker and the build is
 verified against that.
 
+## Running the local stack (no account needed)
+
+Requires Docker Desktop running.
+
+```bash
+npx supabase start --ignore-health-check   # first run pulls ~2GB of images
+npx supabase db reset                      # applies supabase/migrations/
+npx supabase status                        # prints the local URL and keys
+npx supabase stop                          # when you're done
+```
+
+`--ignore-health-check` is needed because the Realtime container reports
+unhealthy on macOS even though it works (verified by round-tripping a
+broadcast). `analytics`, `vector`, `studio`, `storage` and `edge_runtime` are
+disabled in `supabase/config.toml` — unused here, and they broke startup.
+
+`.env.local` is already pointed at the local stack.
+
 ---
 
 ## 1. Create the project

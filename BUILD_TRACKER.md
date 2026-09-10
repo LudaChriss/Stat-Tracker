@@ -117,6 +117,14 @@ Realtime's health check is still flaky even though the service starts and
 serves — local startup therefore uses `--ignore-health-check`. This is a local
 development concern only and does not affect the hosted project.
 
+Realtime was probed directly rather than trusted: a broadcast sent from one
+client and received by a second round-tripped correctly, so Phase 3's transport
+is viable and the failing health check is cosmetic.
+
+Start the local stack with:
+
+    npx supabase start --ignore-health-check
+
 ### D3 — League visibility is a column, not an assumption
 
 Phase 5 wants public spectator views, but making every row world-readable is a
