@@ -23,6 +23,31 @@ import { verifyGame } from './seasonSync.js';
 import { planBackfill } from './backfill.js';
 
 const SAVE_DEBOUNCE_MS = 1200;
+
+/**
+ * The account's history, plus any game that exists only on this device.
+ *
+ * The account used to replace history wholesale, which quietly erased a game
+ * the account had not been told about yet — from the running state AND from the
+ * local mirror written straight afterwards. A game finalised while the write was
+ * still queued disappeared from the phone on the next reload, which is
+ * indistinguishable from data loss even though the queue would have replayed it
+ * later.
+ *
+ * Matching is on the game's client id, which is the same key `save_game` is
+ * idempotent on, so a game the account already has is taken from the account
+ * and never duplicated. A local game with no id cannot collide with anything
+ * and is kept rather than dropped.
+ *
+ * Device-only games go on the end: history is read newest-last, and a game the
+ * account has not seen is by definition one that was just finalised.
+ */
+export function mergeHistory(local, remote) {
+  const fromAccount = remote || [];
+  const known = new Set(fromAccount.map((g) => g && g.id).filter(Boolean));
+  const deviceOnly = (local || []).filter((g) => g && !known.has(g.id));
+  return deviceOnly.length ? [...fromAccount, ...deviceOnly] : fromAccount;
+}
 const SYNCED_GAMES_KEY = 'score-tracker:syncedGames';
 
 // A per-game marker rather than a timestamp: clocks differ between devices,
@@ -326,7 +351,9 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
         // slice alone would replace the whole app state with a fragment and
         // leave, for example, no sport selected at all.
         const base = (cache && cache.loadSync && cache.loadSync()) || {};
-        const merged = { ...base, ...season };
+        // History is merged rather than replaced: the account is authoritative
+        // for every game it knows about, and silent about the ones it does not.
+        const merged = { ...base, ...season, history: mergeHistory(base.history, season.history) };
 
         // Mirror locally so the next cold start works with no signal.
         if (cache) cache.save({ ...merged, __mirroredAt: Date.now() });

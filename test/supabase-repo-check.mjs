@@ -6,7 +6,7 @@
 // field is indistinguishable from data loss, and they would reasonably start
 // re-entering a roster that already exists.
 
-import { createSupabaseRepository } from '../src/data/supabaseRepository.js';
+import { createSupabaseRepository, mergeHistory } from '../src/data/supabaseRepository.js';
 import { INITIAL_STATE } from '../src/data/league.js';
 import { SEEDED } from './fixtures-history.js';
 
@@ -137,6 +137,33 @@ const offlineClient = {
   eq('the selected sport is kept', loaded.sport, 'softball');
   eq('the batting order is kept', loaded.lineup, [1, 2, 3]);
   eq('the bench is kept', loaded.bench, [4]);
+}
+
+// --- merging history: the account is authoritative only for what it knows ----
+// History used to be replaced wholesale, which erased a game finalised while
+// its write was still queued — gone from the running state, and gone from the
+// local mirror written straight afterwards.
+{
+  const a = { id: 'a', result: 'W' };
+  const b = { id: 'b' };
+  const c = { id: 'c' };
+
+  eq('nothing local, the account wins', mergeHistory([], [a, b]).map((g) => g.id), ['a', 'b']);
+  eq('nothing from the account, the device is kept', mergeHistory([a], []).map((g) => g.id), ['a']);
+  eq('overlapping games are not duplicated', mergeHistory([a, b], [a, b]).map((g) => g.id), ['a', 'b']);
+  eq('a game only this device has is appended', mergeHistory([a, c], [a, b]).map((g) => g.id), ['a', 'b', 'c']);
+  eq('and it goes last, because it is the newest', mergeHistory([c], [a, b]).map((g) => g.id).pop(), 'c');
+
+  // The account's copy of a shared game wins: it is the one that has been
+  // verified on write, and the device's may be a stale mirror.
+  const stale = { id: 'a', result: 'L' };
+  eq('a game both have is taken from the account', mergeHistory([stale], [a])[0].result, 'W');
+  eq('and only once', mergeHistory([stale], [a]).length, 1);
+
+  eq('a local game with no id is kept rather than dropped',
+    mergeHistory([{ label: 'no id' }], [a]).length, 2);
+  eq('undefined either side is safe', mergeHistory(undefined, undefined), []);
+  eq('nulls inside the local list do not throw', mergeHistory([null, c], [a]).map((g) => g && g.id), ['a', 'c']);
 }
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');

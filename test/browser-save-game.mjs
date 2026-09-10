@@ -384,6 +384,102 @@ const queueB = await until('the queue to drain', async () => {
 ok('the queue drained', !!queueB);
 if (queueB) eq('with nothing parked', queueB.parked.length, 0);
 
+// ---- a game finalised with no connection survives a RELOAD ----------------------
+// The account used to replace history wholesale on load, so a game whose write
+// had not landed yet was dropped from the screen AND overwritten in local
+// storage on the next launch. The queue would still have replayed it, but the
+// phone stopped showing it in the meantime.
+//
+// "No connection" is narrowed to the write endpoint rather than the whole
+// network, because a fully offline browser cannot reload the app at all — and a
+// reload is the entire point of this check. Everything else behaves normally:
+// the account is reachable, it simply does not have this game yet.
+await send('Network.setBlockedURLs', { urls: ['*rpc/save_game*'] });
+
+// Seed from what the app currently holds, not from an earlier snapshot: if the
+// injected history disagrees with the account, sign-in stops on the "these
+// disagree" prompt, which runs on the LOCAL repository where finalising
+// enqueues nothing. Correct behaviour, but not what this check is about.
+const settledB = await until('the app to settle after the replay', async () => {
+  const s = await appState();
+  return s && (s.history || []).length ? s : null;
+}, 20000);
+need('a settled season to build on', !!settledB);
+
+await put('score-tracker:state', JSON.stringify({
+  version: 3,
+  state: { ...liveState(['2B', 'HR', 'K', '1B', 'BB', 'F8']), history: settledB.history },
+}));
+await send('Page.reload');
+const liveThird = await settled();
+ok('a third game can be started', !!liveThird);
+need('a third live game', !!liveThird);
+const idsBeforeBlocked = new Set((liveThird.history || []).map((g) => g.id));
+const countBeforeBlocked = (await gamesFor(teamId)).length;
+
+eq('tapped Game completed (write blocked)', await clickText('Game completed'), 'OK');
+eq('tapped Finalize (write blocked)', await clickText('Finalize & update standings'), 'OK');
+
+const blockedRecord = await until('the record locally', async () => {
+  const s = await appState();
+  return (s && s.history ? s.history : []).find((g) => !idsBeforeBlocked.has(g.id)) || null;
+});
+ok('the game is recorded on the device', !!blockedRecord);
+need('a record to follow', !!blockedRecord);
+
+await until('the write to be queued', async () => {
+  const q = JSON.parse((await get('score-tracker:queue')) || '{"pending":[],"parked":[]}');
+  return q.pending.some((e) => e.kind === 'game') ? q : null;
+}, 15000);
+eq('it has not reached the account', (await gamesFor(teamId)).length, countBeforeBlocked);
+
+// The reload that used to lose it.
+await send('Page.reload');
+await until('the app to come back up', async () => {
+  const s = await appState();
+  return s && s.myTeam && s.myTeam.name ? s : null;
+}, 25000);
+
+const survived = await until('the game to still be there after the reload', async () => {
+  const s = await appState();
+  return (s && s.history ? s.history : []).some((g) => g.id === blockedRecord.id) ? s : null;
+}, 20000);
+ok('after a reload the unsent game is STILL in the season', !!survived,
+  'the account replaced history and the game was dropped');
+
+if (survived) {
+  const back = survived.history.find((g) => g.id === blockedRecord.id);
+  eq('with its result intact', back.result, blockedRecord.result);
+  eq('and its score', back.score, blockedRecord.score);
+  eq('and it appears exactly once', survived.history.filter((g) => g.id === blockedRecord.id).length, 1);
+  eq('the account games are still there too', survived.history.length, liveThird.history.length + 1);
+}
+
+const stillQueued = JSON.parse((await get('score-tracker:queue')) || '{"pending":[],"parked":[]}');
+ok('and the write is still queued after the reload',
+  stillQueued.pending.some((e) => e.kind === 'game' && e.payload.id === blockedRecord.id),
+  JSON.stringify(stillQueued.pending.map((e) => e.kind)));
+eq('with nothing parked', stillQueued.parked.length, 0);
+
+// Unblock: the queued write should now land, and nothing should double up.
+await send('Network.setBlockedURLs', { urls: [] });
+await js(`window.dispatchEvent(new Event('online')), 1`);
+
+const landed = await until('the queued game to land', async () => {
+  const rows = await gamesFor(teamId);
+  return rows.find((g) => g.client_id === blockedRecord.id) || null;
+}, 25000);
+ok('once the write can go through, it lands', !!landed);
+eq('and exactly one row was added', (await gamesFor(teamId)).length, countBeforeBlocked + 1);
+
+await send('Page.reload');
+const settledAfter = await until('one final reload', async () => {
+  const s = await appState();
+  return s && (s.history || []).some((g) => g.id === blockedRecord.id) ? s : null;
+}, 25000);
+ok('and after one more reload it is still there, exactly once',
+  settledAfter && settledAfter.history.filter((g) => g.id === blockedRecord.id).length === 1);
+
 // ---- no crash anywhere along the way --------------------------------------------
 const crashed = await js(`!!document.body.textContent.match(/Something went wrong|TEMPLATES/)`);
 eq('the app never fell into its error boundary', crashed, false);

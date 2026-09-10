@@ -5,7 +5,7 @@ finalised on the phone is now written to the account.**
 
 Plus the backfill for games finalised before that slice, now built.
 
-**690 assertions, 23 suites, build clean, viewport audit clean** (56
+**719 assertions, 24 suites, build clean, viewport audit clean** (56
 screen×viewport combinations, no overflow, no tap target under 44px).
 Nothing is blocked. Do not push before reading §5.
 
@@ -77,34 +77,26 @@ Two further limits, both scoped to later phases and neither blocking:
 
 ## 4. Deploy checklist, in order
 
-**Where this actually stands: steps 1 and 3-7 are DONE. Only `_013` is
-outstanding.** Read from the hosted project's own migration history with
-`npx supabase migration list --linked`, not inferred:
+**Every step in this checklist is done.** Read from the hosted project's own
+migration history with `npx supabase migration list --linked`, not inferred:
+**14 local migrations, 14 applied remotely, 0 pending.**
 
 | Step | State |
 |---|---|
 | 1. Create the project | done, CLI linked |
-| 2. Push the schema | **13 of 14 applied** — `_000` through `_012`. `_013_save_game` is the only one missing |
+| 2. Push the schema | done — all 14 migrations, `_000` through `_013` |
 | 3. Check the push landed | done, counts verified in the SQL Editor |
-| 4. `{{ .Token }}` email template | done — proved by signing in with a typed 6-digit code |
-| 5. Vercel environment variables | done — proved by the deployed app reaching the backend at all |
-| 6. Redeploy | done for those variables |
+| 4. `{{ .Token }}` email template | done |
+| 5. Vercel environment variables | done |
+| 6. Redeploy | done |
 | 7. First sign-in on the phone | done — signed in, added players, exported |
 
-**So the only database step left is `npx supabase db push`, which will apply
-`_013` and nothing else.** Steps 4-6 are one-time settings and are not touched
-by anything since; do not redo them.
+Nothing in the work since has added a migration: the backfill deliberately
+reuses `save_game` rather than introducing an RPC, and the history-merge fix is
+client-side. **The only remaining step is `git push`,** after which Vercel
+redeploys the new client code.
 
-A new Vercel deploy IS needed, but for a different reason than step 6: the
-`saveGame` client code is new. Prefer pushing `_013` *before* that deploy goes
-live. If it happens the other way round, a game finalised in the gap calls a
-function the database does not have — PostgREST answers `PGRST202`, which the
-queue classifies **transient** (verified against the real thing, not assumed),
-so the write stays pending and lands when `_013` does. Nothing is lost. The
-cost is only that the queue is strictly ordered, so a season save behind it
-waits too.
-
-`.env.local` points at localhost and must stay that way.
+Keep the rest of this section for the next time a database change ships.
 
 **The order matters.** The database must exist and have the schema *before* the
 app is pointed at it, or the first person to open the deployed app hits errors
@@ -244,11 +236,10 @@ stays in charge — you will see a message saying so.
   will not be pushed, but do not copy it to Vercel.
 - Confirm `git log` looks right: 28 commits, latest `Write a finalized game to
   the backend`.
-- The hosted project has `_000`-`_012`. **`_013` is the only migration not on
-  it.** Run `npx supabase db push` before the new client code is deployed; see
-  §4 for what happens if the order slips (nothing is lost, the write waits).
-- The email template, environment variables and redeploy from §4 steps 4-6 are
-  already done and must not be redone.
+- The hosted project is fully migrated: 14 of 14, nothing pending. No database
+  step is outstanding and none of §4 steps 4-6 need redoing.
+- Pushing is the last step. Vercel will redeploy the client code that calls
+  `save_game` and the backfill.
 
 ## 6. Sending past games to your account
 
@@ -304,32 +295,62 @@ history, so it wants to be a deliberate action with an export in hand and its
 own confirmation naming every game it would change — not something a bulk send
 does on the way past.
 
-## 8. Found while building this: a device-only game can be erased
+## 8. Fixed: a game that exists only on this device is never dropped
 
-**Not fixed, because it is outside what was asked for, and it is a real data
-loss path.**
+**Was:** `load()` merged the account's season over the local one and mirrored
+the result back to localStorage. History came from the account, so a game the
+account had not been told about yet was dropped from the running state *and
+overwritten in localStorage*. The queue would still have replayed it, but the
+phone stopped showing it in the meantime — indistinguishable from data loss.
 
-`load()` merges the account's season over the local one and then mirrors the
-result back to localStorage (`supabaseRepository.js`). History comes from the
-account, so a game that exists only on the device is dropped from the running
-state *and overwritten in localStorage*. Verified through the real storage API
-against a real database: a game present on the device and absent from the
-account was gone from `localStorage` after one `load()`.
+**Now:** history is merged, not replaced. `mergeHistory(local, remote)` takes
+every game the account has, then appends any local game whose id the account
+does not know. Matching is on the game's client id — the same key `save_game` is
+idempotent on — so a game the account already has is taken from the account and
+never duplicated. Device-only games go last, because history reads newest-last
+and a game the account has not seen is one that was just finalised. A local game
+with no id at all is kept rather than dropped: it cannot collide with anything.
 
-This matters in one concrete window: **if the new client code is deployed
-before `_013` is pushed**, a finalised game sits in the write queue (transient,
-as established in §4) while the next reload wipes it from the visible history.
-The queue still replays it later, so the account eventually gets it — but the
-phone stops showing it in the meantime, which looks exactly like data loss.
+### What "the account is authoritative" means now
 
-It also sits awkwardly against the standing rule that adopting the account's
-season must not modify local data.
+It was: *the account replaces the device.* It is now: **the account is
+authoritative for every game it knows about, and silent about the ones it does
+not.**
 
-**Recommended fix:** when merging, keep any local game whose id the account
-does not have, rather than letting the account's history replace the device's
-wholesale. That turns this case into precisely what the backfill is for. It
-needs its own review because it changes what "the account is authoritative"
-means.
+- A game **both** sides have is taken from the account, every time. The
+  account's copy is the one that was verified on write; the device's may be a
+  stale mirror. Editing a game on the device and never sending it does not
+  survive a reload.
+- A game **only the account** has appears on the device. Unchanged.
+- A game **only the device** has stays, visibly, until it is sent. It is no
+  longer evidence that the device is wrong — it is evidence the account has not
+  been told yet.
+- Team name, roster and opposing teams are unchanged: still wholly the
+  account's. Only history merges.
+
+**The trade-off, stated plainly:** deleting a game becomes harder to propagate.
+Nothing deletes games in the account today (`deleteGame` is local-only), so
+there is no live conflict. But if a delete-in-the-account feature is ever built,
+this merge will resurrect the deleted game from any device still mirroring it,
+and that feature will need a tombstone rather than an absence. Worth knowing
+before phase 4 makes teams shared.
+
+### How it is pinned
+
+- `test/mirror-check.mjs` — through the real storage API against real Postgres:
+  a queued, unsent game survives `load()` in both the running state and
+  localStorage, is not duplicated by a second load, and once it finally lands
+  the account's copy is the one that counts.
+- `test/supabase-repo-check.mjs` — `mergeHistory` on its own, including the
+  overlap case, a local game with no id, and nulls.
+- `test/browser-save-game.mjs` — the whole thing in a real browser: with the
+  write endpoint blocked, finalise a game, **reload**, and it is still on screen
+  and still queued; unblock and it lands, exactly once, surviving one more
+  reload.
+
+Each of these was run against the old behaviour to confirm it actually fails
+there: the browser check fails on exactly one assertion, the database check on
+seven.
 
 ---
 
@@ -421,8 +442,7 @@ lost or reinstalled phone, and it needs none of the machinery below.
 - **Undo and cancel in the shared model (3d).** Undo and cancel work on the
   device exactly as before, but a game already written to the account is not
   reopened, retracted or deleted by them.
-- **Backfill.** Built since, as a manual button — see §6. Still deferred: it
-  reaches only what the app currently shows as history (see §8).
+- **Backfill.** Built since, as a manual button — see §6.
 
 ## Phase 4 — Multi-team and multi-league
 
@@ -448,7 +468,7 @@ lost or reinstalled phone, and it needs none of the machinery below.
 | 6a | Full regression across all phases on iPhone viewports | todo |
 | 6b | Offline behaviour | **partial**. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Extended since: a game finalised with the network cut is queued, not lost, and is delivered on reconnect — verified in a browser. Remaining: offline *mid-game* (that is the event log, phase 3), surfacing parked writes in the UI, and the recovery flow for them |
 | 6c | Error boundaries, empty states, loading states everywhere data is fetched | todo |
-| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Done in the pulled-forward phase 3 slice: a game finalised while signed in is written to the account and verified on read-back, and a manual backfill sends games finalised before it. Remaining: repairing legacy records that cannot be sent (§7), and the merge that can drop a device-only game (§8) |
+| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Done in the pulled-forward phase 3 slice: a game finalised while signed in is written to the account and verified on read-back, and a manual backfill sends games finalised before it. Remaining: repairing legacy records that cannot be sent (§7) |
 
 ---
 
@@ -564,6 +584,23 @@ Two consequences, both accepted on purpose:
 
 It also never repairs anything on the way past. A game it cannot send is named
 and left exactly as it is; rewriting history is a separate, deliberate step.
+
+### D10 — The account is authoritative for what it knows, not for what it lacks
+
+Loading the account used to replace the device's history outright. That is the
+right rule for the team name and the roster, and the wrong one for games: the
+account not having a game usually means it has not been told yet, not that the
+game did not happen.
+
+History is therefore merged on the game's client id. A game both sides have
+comes from the account; a game only the device has stays until it is sent. The
+practical effect is that a game finalised while the write is still queued
+remains on screen across a reload instead of vanishing and reappearing when the
+queue drains.
+
+The cost is that an absence in the account can no longer express a deletion. No
+feature deletes games in the account today, so nothing conflicts; when one
+exists it will need an explicit tombstone.
 
 ### D3 — League visibility is a column, not an assumption
 
