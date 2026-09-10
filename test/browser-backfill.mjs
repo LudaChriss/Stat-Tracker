@@ -185,14 +185,22 @@ await until('a clean boot', async () => (await js(`Object.keys(localStorage).len
 
 await put('score-tracker:state', JSON.stringify({ version: 3, state: { ...seeded, screen: 'roster' } }));
 await send('Page.reload');
-await until('the roster screen signed out', async () => {
-  const t = await bodyText();
-  return t && /Season data|Export season/.test(t) ? t : null;
-}, 20000);
 {
+  // With a backend configured and no session, the app blocks on sign-in — the
+  // season on this device is not reachable at all. That is today's behaviour,
+  // asserted here so that phase 2a changing it is a deliberate, visible change
+  // rather than a silent one.
+  const shown = await until('whatever the app shows with no session', async () => {
+    const t = await bodyText();
+    return t && t.length > 40 ? t : null;
+  }, 20000);
+  ok('with no session the app shows the sign-in screen', /Sign in/.test(shown || ''), (shown || '').slice(0, 160));
+  ok('and the local season is not reachable behind it',
+    !/Season data|Export season/.test(shown || ''), (shown || '').slice(0, 160));
+
   const list = await buttons();
-  ok('signed out, the button is not offered', !list.some((b) => b.includes('Send past games')),
-    JSON.stringify(list.filter((b) => b.includes('Send'))));
+  ok('so the backfill button is not offered either',
+    !list.some((b) => b.includes('Send past games')), JSON.stringify(list));
 }
 
 // ---- signed in, with a season that migrates up -------------------------------
@@ -220,6 +228,16 @@ await until('the roster screen', async () => {
   const t = await bodyText();
   return t && /Season data/.test(t) ? t : null;
 }, 25000);
+
+{
+  const signedInText = await bodyText();
+  ok('signed in, the export note says the account holds the season',
+    /saved to your account/.test(signedInText), signedInText.slice(0, 300));
+  ok('and no longer claims a reinstall takes the season with it',
+    !/lives only in this browser/.test(signedInText), signedInText.slice(0, 300));
+  ok('while still pointing at the export as a file copy',
+    /file copy you keep yourself/.test(signedInText), signedInText.slice(0, 300));
+}
 
 eq('signed in, the button is offered', await clickText('⇪ Send past games to my account'), 'OK');
 

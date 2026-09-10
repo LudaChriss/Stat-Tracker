@@ -474,9 +474,10 @@ export function deriveView(s, actions) {
       };
     }),
     resetFlow: s.resetFlow,
-    // The button only exists on an adapter that can actually send games, so
-    // local-only mode never shows it.
-    canBackfill: !!(actions.hasBackfill && actions.hasBackfill()),
+    // True only on an adapter that actually writes to an account. It gates the
+    // backfill button, and it decides whether this device is the only copy —
+    // which is the difference between two very different warnings.
+    syncsToAccount: !!(actions.hasBackfill && actions.hasBackfill()),
     backfill: s.backfill,
     importPreview: s.importPreview,
     importError: s.importError,

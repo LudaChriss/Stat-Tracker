@@ -213,11 +213,15 @@ export default function RosterEditor({ v, actions }) {
           ⤓ Export season as JSON
         </button>
         <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
-          Your data lives only in this browser. Export now and then — reinstalling
-          the app or clearing site data will take the season with it.
+          {v.syncsToAccount
+            ? `Your team, roster and finished games are saved to your account, so signing in on
+               another phone brings them back. An export is still a file copy you keep yourself —
+               the one that does not depend on the account.`
+            : `Your data lives only in this browser. Export now and then — reinstalling the app or
+               clearing site data will take the season with it.`}
         </div>
 
-        {v.canBackfill && (
+        {v.syncsToAccount && (
           <>
             <button
               onClick={actions.openBackfill}
