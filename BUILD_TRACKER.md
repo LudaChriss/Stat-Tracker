@@ -75,16 +75,32 @@ Two further limits, both scoped to later phases and neither blocking:
 
 ## 4. Deploy checklist, in order
 
-**Where this actually stands now** (steps 1-3 are done; 2 needs running again):
+**Where this actually stands: steps 1 and 3-7 are DONE. Only `_013` is
+outstanding.** Read from the hosted project's own migration history with
+`npx supabase migration list --linked`, not inferred:
 
-- The Supabase project exists and the CLI is linked to it.
-- Migrations `_000` through `_011` are on it — you pushed them and the counts
-  checked out.
-- **Migrations `_012` and `_013` exist only locally.** `_012` is the fix that
-  stops `save_season` wiping a roster; `_013` is `save_game`. Until you push
-  them, finalising a game does nothing on the hosted project and the roster
-  guard is not in place. Run step 2 again.
-- Steps 4-7 have not been done at all.
+| Step | State |
+|---|---|
+| 1. Create the project | done, CLI linked |
+| 2. Push the schema | **13 of 14 applied** — `_000` through `_012`. `_013_save_game` is the only one missing |
+| 3. Check the push landed | done, counts verified in the SQL Editor |
+| 4. `{{ .Token }}` email template | done — proved by signing in with a typed 6-digit code |
+| 5. Vercel environment variables | done — proved by the deployed app reaching the backend at all |
+| 6. Redeploy | done for those variables |
+| 7. First sign-in on the phone | done — signed in, added players, exported |
+
+**So the only database step left is `npx supabase db push`, which will apply
+`_013` and nothing else.** Steps 4-6 are one-time settings and are not touched
+by anything since; do not redo them.
+
+A new Vercel deploy IS needed, but for a different reason than step 6: the
+`saveGame` client code is new. Prefer pushing `_013` *before* that deploy goes
+live. If it happens the other way round, a game finalised in the gap calls a
+function the database does not have — PostgREST answers `PGRST202`, which the
+queue classifies **transient** (verified against the real thing, not assumed),
+so the write stays pending and lands when `_013` does. Nothing is lost. The
+cost is only that the queue is strictly ordered, so a season save behind it
+waits too.
 
 `.env.local` points at localhost and must stay that way.
 
@@ -226,10 +242,11 @@ stays in charge — you will see a message saying so.
   will not be pushed, but do not copy it to Vercel.
 - Confirm `git log` looks right: 28 commits, latest `Write a finalized game to
   the backend`.
-- The hosted project has migrations `_000`-`_011`. **`_012` and `_013` are not
-  on it.** Push the code, then run §4 step 2 — in that order does not matter
-  here, but a game finalised before `_013` lands will sit in the queue rather
-  than reach the account. It will not be lost; it replays.
+- The hosted project has `_000`-`_012`. **`_013` is the only migration not on
+  it.** Run `npx supabase db push` before the new client code is deployed; see
+  §4 for what happens if the order slips (nothing is lost, the write waits).
+- The email template, environment variables and redeploy from §4 steps 4-6 are
+  already done and must not be redone.
 
 ## 6. Recommended next, not built: a backfill for older games
 
