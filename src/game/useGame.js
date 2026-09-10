@@ -17,16 +17,18 @@ import {
 const TOAST_MS = 2600;
 const SYNC_MS = 3200;
 
-// One adapter for the life of the app. Swapping this for a Supabase-backed
-// repository later is the whole point of the abstraction — nothing below
-// this line should need to change to do it.
-const repository = createLocalRepository();
+// The default when nothing is injected: this device's own storage. A
+// Supabase-backed repository is passed in once someone signs in — which is
+// the whole point of the abstraction, and why nothing below this line had to
+// change to do it.
+const defaultRepository = createLocalRepository();
 
 /**
  * Owns the whole app state. Every action is expressed as a state -> state
  * function so the scoring engine stays testable and free of React.
  */
-export function useGame() {
+export function useGame(injectedRepository) {
+  const repository = injectedRepository || defaultRepository;
   // Start blank; resume a saved season once the repository resolves. The
   // load is async-friendly (a network adapter will genuinely await it), but
   // the local adapter settles on a microtask, so kicking it off in a layout
@@ -36,22 +38,32 @@ export function useGame() {
   // An adapter with synchronous storage seeds the first render directly, so
   // there is no flash of the setup screen before the season appears. Adapters
   // without loadSync (anything network-backed) start blank and hydrate below.
-  const [state, setState] = useState(() =>
-    repository.loadSync ? repository.loadSync() || INITIAL_STATE : INITIAL_STATE,
-  );
+  const seededRef = useRef(null);
+  const [state, setState] = useState(() => {
+    const seed = (repository.loadSync && repository.loadSync()) || INITIAL_STATE;
+    seededRef.current = seed;
+    return seed;
+  });
+  // Seeded synchronously means saving is safe immediately; a purely async
+  // adapter must not save until its load has settled, or a blank first render
+  // would be written over a real season.
   const [hydrated, setHydrated] = useState(() => !!repository.loadSync);
 
   useLayoutEffect(() => {
-    if (repository.loadSync) return undefined; // already seeded synchronously
+    // Always run the async load, even when a synchronous seed was available:
+    // for a network-backed adapter the seed is only the local mirror, and the
+    // authoritative copy still has to be fetched.
     let cancelled = false;
     repository
       .load()
       .then((loaded) => {
-        if (cancelled) return;
-        if (loaded) setState(loaded);
+        if (cancelled || !loaded) return;
+        // Do not overwrite anything the user has already changed while the
+        // load was in flight — only replace the untouched seed.
+        setState((current) => (current === seededRef.current ? loaded : current));
       })
       .catch(() => {
-        /* best-effort: fall back to a blank season */
+        /* best-effort: keep whatever was seeded */
       })
       .finally(() => {
         if (!cancelled) setHydrated(true);

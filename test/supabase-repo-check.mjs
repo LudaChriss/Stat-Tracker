@@ -105,5 +105,39 @@ const offlineClient = {
   eq('no error recorded on success', repo.getLastError(), null);
 }
 
+// --- a backend load must not replace the whole app state with a fragment ---
+// Regression: load() returned only { myTeam, roster, teams, history }. useGame
+// set that as the entire state, so sport/lineup/bench vanished and the live
+// screen crashed reading TEMPLATES[undefined].
+{
+  const seasonRows = {
+    team: { id: 't9', name: 'Merged FC', prior_w: 0, prior_l: 0, prior_t: 0, client_id: null },
+  };
+  const client = {
+    from(table) {
+      const chain = {
+        select: () => chain, eq: () => chain, neq: () => chain, or: () => chain,
+        in: () => chain, order: () => chain,
+        maybeSingle: () => Promise.resolve({ data: seasonRows.team, error: null }),
+        then: (res) => res({ data: [], error: null }),
+      };
+      return chain;
+    },
+  };
+  const localState = { sport: 'softball', lineup: [1, 2, 3], bench: [4], screen: 'team', myTeam: { name: 'Old' } };
+  const cache = {
+    loadSync: () => localState,
+    save: () => {},
+    getPreserved: async () => null,
+    clearPreserved: () => {},
+  };
+  const repo = createSupabaseRepository(client, { getTeamId: () => 't9', cache });
+  const loaded = await repo.load();
+  eq('the season is taken from the backend', loaded.myTeam.name, 'Merged FC');
+  eq('the selected sport is kept', loaded.sport, 'softball');
+  eq('the batting order is kept', loaded.lineup, [1, 2, 3]);
+  eq('the bench is kept', loaded.bench, [4]);
+}
+
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

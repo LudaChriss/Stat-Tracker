@@ -18,6 +18,7 @@
 // their season.
 
 import { rowsToSeason, seasonToRows } from './seasonMapping.js';
+import { createOfflineQueue } from './offlineQueue.js';
 
 const SAVE_DEBOUNCE_MS = 1200;
 
@@ -27,9 +28,32 @@ const SAVE_DEBOUNCE_MS = 1200;
  * @param {() => string|null} options.getTeamId  which team this device scores for
  * @param {object} [options.cache]  a local repository used as the offline mirror
  */
-export function createSupabaseRepository(client, { getTeamId, cache = null } = {}) {
+export function createSupabaseRepository(client, { getTeamId, cache = null, queue = null } = {}) {
   let saveTimer = null;
   let lastError = null;
+
+  // Writes go through a durable queue so that losing signal mid-edit does not
+  // lose the edit. The queue replays in order when the connection returns.
+  const writes = queue || createOfflineQueue();
+
+  const handlers = {
+    season: async (payload) => {
+      await writeSeason(payload);
+    },
+  };
+
+  async function flushQueue() {
+    const result = await writes.flush(handlers);
+    lastError = writes.parked().length ? new Error('Some changes could not be saved') : null;
+    return result;
+  }
+
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    // Coming back online is the moment the queue matters.
+    window.addEventListener('online', () => {
+      flushQueue().catch(() => {});
+    });
+  }
 
   async function fetchSeason(teamId) {
     // One round trip per entity rather than a join, so a failure is
@@ -77,40 +101,46 @@ export function createSupabaseRepository(client, { getTeamId, cache = null } = {
     const teamId = getTeamId();
     if (!teamId) return;
 
-    const rows = seasonToRows(state, { myTeamId: teamId });
-
-    // Upserts are keyed on the natural identity of each row, so a repeated
-    // save is idempotent rather than duplicating a roster.
-    const steps = [
-      client.from('teams').update({
-        name: rows.team.name,
-        prior_w: rows.team.prior_w,
-        prior_l: rows.team.prior_l,
-        prior_t: rows.team.prior_t,
-      }).eq('id', teamId),
-      rows.players.length
-        ? client.from('players').upsert(
-            rows.players.map((p) => ({ ...p, team_id: teamId })),
-            { onConflict: 'team_id,client_id' },
-          )
-        : null,
-    ].filter(Boolean);
-
-    const results = await Promise.all(steps);
-    const failed = results.find((r) => r && r.error);
-    if (failed) throw failed.error;
+    // One call, one transaction. Doing this as separate statements left the
+    // team renamed but the roster stale when the second one failed.
+    const { error } = await client.rpc('save_season', {
+      p_team_id: teamId,
+      payload: {
+        myTeam: state.myTeam,
+        roster: state.roster,
+      },
+    });
+    if (error) throw error;
   }
 
+
   return {
+    // The local mirror reads synchronously, so the first paint shows the last
+    // known season instead of a blank screen while the network load runs.
+    // useGame replaces it with the authoritative copy when that arrives.
+    loadSync() {
+      return cache && cache.loadSync ? cache.loadSync() : null;
+    },
+
     async load() {
       const teamId = getTeamId();
       if (!teamId) return cache ? cache.loadSync?.() ?? null : null;
       try {
         const season = await fetchSeason(teamId);
         lastError = null;
+        if (!season) return cache ? cache.loadSync?.() ?? null : null;
+
+        // The backend holds the SEASON — team, roster, opponents, history. It
+        // does not hold this device's own state: which sport is selected, the
+        // batting order, the bench, anything mid-game. Returning the season
+        // slice alone would replace the whole app state with a fragment and
+        // leave, for example, no sport selected at all.
+        const base = (cache && cache.loadSync && cache.loadSync()) || {};
+        const merged = { ...base, ...season };
+
         // Mirror locally so the next cold start works with no signal.
-        if (season && cache) cache.save({ ...season, __mirroredAt: Date.now() });
-        return season;
+        if (cache) cache.save({ ...merged, __mirroredAt: Date.now() });
+        return merged;
       } catch (err) {
         lastError = err;
         // Offline or unreachable: fall back to the local mirror rather than
@@ -123,12 +153,25 @@ export function createSupabaseRepository(client, { getTeamId, cache = null } = {
       if (cache) cache.save(state); // local mirror is always written first
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
-        writeSeason(state).catch((err) => {
-          lastError = err;
-          // Phase 6b turns this into a retry queue; for now the local mirror
-          // means nothing is lost, it is just not yet pushed.
-        });
+        const teamId = getTeamId();
+        if (!teamId) return;
+        // Coalesced per team: a later whole-season snapshot wholly contains an
+        // earlier one, so replaying both would be waste, not safety. Event-log
+        // appends are never coalesced.
+        writes.enqueue({ kind: 'season', payload: state, coalesceKey: teamId });
+        flushQueue().catch(() => {});
       }, SAVE_DEBOUNCE_MS);
+    },
+
+    /** Push anything queued while offline. Safe to call at any time. */
+    flush: flushQueue,
+
+    /** Writes that failed permanently and are waiting to be dealt with. */
+    pendingWrites: () => writes.size(),
+    parkedWrites: () => writes.parked(),
+    retryParked: () => {
+      writes.retryParked();
+      return flushQueue();
     },
 
     async getPreserved() {
