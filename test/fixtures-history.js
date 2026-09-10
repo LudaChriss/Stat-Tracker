@@ -146,7 +146,7 @@ export const FIXTURE_TEAMS = [
 /** Wrap the app's blank INITIAL_STATE in the demo season. */
 export const SEEDED = (blank) => ({
   ...blank,
-  myTeam: { name: HOME_TEAM, priorW: 4, priorL: 1 },
+  myTeam: { name: HOME_TEAM, priorW: 4, priorL: 1, priorT: 0 },
   roster: FIXTURE_ROSTER,
   teams: FIXTURE_TEAMS,
   opponentId: 'rubber-chickens',
