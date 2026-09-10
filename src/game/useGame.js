@@ -39,15 +39,21 @@ export function useGame(injectedRepository) {
   // there is no flash of the setup screen before the season appears. Adapters
   // without loadSync (anything network-backed) start blank and hydrate below.
   const seededRef = useRef(null);
+  const syncSeed = (repository.loadSync && repository.loadSync()) || null;
   const [state, setState] = useState(() => {
-    const seed = (repository.loadSync && repository.loadSync()) || INITIAL_STATE;
+    const seed = syncSeed || INITIAL_STATE;
     seededRef.current = seed;
     return seed;
   });
-  // Seeded synchronously means saving is safe immediately; a purely async
-  // adapter must not save until its load has settled, or a blank first render
-  // would be written over a real season.
-  const [hydrated, setHydrated] = useState(() => !!repository.loadSync);
+  // Saving is only safe once we actually HAVE the season — not merely because
+  // the adapter offers a synchronous read.
+  //
+  // This previously asked whether loadSync existed rather than whether it
+  // returned anything. On a device with nothing cached — a second phone, a
+  // reinstall — that made a blank first render count as hydrated, and the app
+  // saved that emptiness over a real season. Waiting for the async load costs
+  // nothing here and is the difference between a stale render and data loss.
+  const [hydrated, setHydrated] = useState(() => !!syncSeed);
 
   useLayoutEffect(() => {
     // Always run the async load, even when a synchronous seed was available:
