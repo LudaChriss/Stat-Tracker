@@ -1,3 +1,100 @@
+# Morning report — Phase 1 is green
+
+All six slices done. **589 assertions, 20 suites, build clean, viewport audit clean.**
+Nothing is blocked. Do not push before reading §5.
+
+## 1. Built, and how far it was verified
+
+**Verified in a real browser, end to end** — signed in with a code actually
+emailed and typed in, migrated the season up, verified it, disabled the network,
+renamed the team offline, restored the network, and watched the write replay to
+the account. Queue drained, nothing parked, edit survived a reload, still signed
+in, no console errors.
+
+**Verified against the real database (not the browser)**: schema, all 27 RLS
+policies, the import, `discard_import`, and the adversarial attack suite.
+
+**Verified in tests only**: the offline queue's parked/permanent-failure paths,
+the sync-decision branches, and the config-error screen. The happy paths of each
+were exercised in the browser; the failure paths were not.
+
+**Not verified anywhere**: nothing on a real iPhone yet. That needs a deploy.
+
+## 2. Judgement calls
+
+- **Backend load merges, never replaces.** It returned only the season and
+  `useGame` set that as the whole state — sport and batting order vanished and
+  the live screen crashed. The backend owns the season; the device owns its own
+  state.
+- **Saving is one transactional function.** It was two round trips, so a failure
+  left the team renamed and the roster stale. Half-applied is worse than failed.
+- **A season write is coalesced per team**, since a later snapshot wholly
+  contains an earlier one. Event-log appends (phase 3) are never coalesced.
+- **Anything unexpected during reconciliation leaves the device in charge** of
+  its own data rather than showing an account season we could not verify.
+- **Which team is "mine" is recorded on the profile**, not guessed. A user
+  manages several teams after an import, and guessing picks wrong eventually.
+- **Production with no env vars refuses to start**; development still runs
+  local-only, because that is a real mode rather than a mistake.
+
+## 3. Not finished
+
+Nothing from 1f. Phase 2 not started, as instructed.
+
+Two known limits, both scoped to later phases and neither blocking:
+- The backend does not yet store the batting order or the bench — those stay on
+  the device. Fine for one scorer; phase 4 needs them shared.
+- An import makes you manager of the opposing teams it creates. Correct for a
+  solo season; phase 4 will need league-owned teams to supersede them.
+
+## 4. Deploy checklist, in order
+
+1. **Vercel → Settings → Environment Variables.** Add both to Production,
+   Preview and Development:
+   - `VITE_SUPABASE_URL` — `https://xxxxx.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY` — the **anon** key, never `service_role`
+2. **Redeploy.** Vite bakes these in at build time; an existing deployment will
+   not pick them up. If you skip this the app will show a screen naming the
+   missing variables — by design.
+3. **Push the schema:**
+   ```
+   npx supabase login
+   npx supabase link --project-ref xxxxx
+   npx supabase db push
+   ```
+4. ⚠️ **Change the sign-in email template. THIS IS THE STEP THAT SILENTLY BREAKS
+   SIGN-IN IF SKIPPED.** Without it the email contains a link and no code; the
+   link opens in Safari, so the installed app stays signed out and there is
+   nothing to type in. Nothing will say why.
+   - Supabase dashboard → **Authentication → Email Templates → Magic Link**
+   - Replace the body with:
+     ```
+     <h2>Your sign-in code</h2>
+     <p>Enter this code in the app:</p>
+     <p style="font-size:28px;font-weight:800;letter-spacing:.18em">{{ .Token }}</p>
+     ```
+   - The key part is `{{ .Token }}` instead of `{{ .ConfirmationURL }}`. Save.
+   - Also **Authentication → URL Configuration**: set Site URL to your Vercel
+     URL and add `https://<your-app>.vercel.app/**` to Redirect URLs.
+5. **First sign-in on your phone.** Open the deployed URL in Safari, Share →
+   Add to Home Screen, open it from the home screen, enter your email, then the
+   6-digit code. Your local season migrates up and is verified before the device
+   stops being the source of truth.
+
+## 5. Before you push
+
+- **Export your season first** (Manage roster → Export season as JSON). Nothing
+  in this build deletes local data — there is a test that fails if any code path
+  tries — but you have one copy of a real season and this is a large change.
+- `.env.local` currently points at the **local** stack. It is gitignored, so it
+  will not be pushed, but do not copy it to Vercel.
+- Confirm `git log` looks right: 20 commits, latest `Phase 1f: sign in,
+  migrate, and keep writing offline`.
+- Nothing was changed in any hosted Supabase project. Step 4 above is the only
+  thing that needs your hands.
+
+---
+
 # Build Tracker
 
 Live checklist for the multi-team / multi-league / live-shared-scoring build.
@@ -40,7 +137,7 @@ only ever go up.
 | 1c | Repository abstraction; local adapter preserves today's behaviour exactly | **green** |
 | 1d | Supabase adapter: state ⇄ rows mapping, both directions | **green** (verified against the real database) |
 | 1e | "Import my existing data": export JSON → backend as my team | **green** |
-| 1f | Wire the app to the repository; localStorage demoted to offline cache/queue | todo |
+| 1f | Wire the app to the repository; localStorage demoted to offline cache/queue | **green** |
 
 ## Phase 2 — Accounts and roles
 
