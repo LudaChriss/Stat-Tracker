@@ -112,24 +112,38 @@ function preserve(raw) {
   }
 }
 
-export function loadState(fallback) {
+/**
+ * Read the stored season, or null when there is nothing to restore — because
+ * storage is empty, unavailable, or holds something unreadable.
+ *
+ * This is the honest primitive: callers that need to distinguish "no saved
+ * season" from "a saved season that happens to look blank" must use this
+ * rather than comparing loadState's result against the fallback by identity.
+ */
+export function readState(defaults) {
   let raw;
   try {
     raw = localStorage.getItem(KEY);
   } catch {
-    return fallback; // storage unavailable — run without persistence
+    return null; // storage unavailable — run without persistence
   }
-  if (!raw) return fallback;
+  if (!raw) return null;
 
   try {
-    const migrated = migrateState(JSON.parse(raw), fallback);
+    const migrated = migrateState(JSON.parse(raw), defaults);
     if (migrated) return migrated;
     preserve(raw);
-    return fallback;
+    return null;
   } catch {
     preserve(raw); // corrupt payload — keep it for manual recovery
-    return fallback;
+    return null;
   }
+}
+
+/** As readState, but falls back to the given defaults instead of null. */
+export function loadState(fallback) {
+  const stored = readState(fallback);
+  return stored === null ? fallback : stored;
 }
 
 /** Raw text of a save that could not be read, if there is one. */

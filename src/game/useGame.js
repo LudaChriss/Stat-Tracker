@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_STATE, PLAYER_COLORS } from '../data/league.js';
 import { nextId, slugId } from '../data/ids.js';
+import { createLocalRepository } from '../data/localRepository.js';
 import { saveSeasonFile } from './export.js';
 import { applySeason, parseSeasonFile } from './importSeason.js';
-import { clearPreserved, getPreserved, requestPersistence } from './storage.js';
-import { loadState, saveState } from './storage.js';
+import { requestPersistence } from './storage.js';
 import {
   buildGameRecord,
   applyMoveLineup,
@@ -17,13 +17,49 @@ import {
 const TOAST_MS = 2600;
 const SYNC_MS = 3200;
 
+// One adapter for the life of the app. Swapping this for a Supabase-backed
+// repository later is the whole point of the abstraction — nothing below
+// this line should need to change to do it.
+const repository = createLocalRepository();
+
 /**
  * Owns the whole app state. Every action is expressed as a state -> state
  * function so the scoring engine stays testable and free of React.
  */
 export function useGame() {
-  // Resume a saved season if there is one; otherwise start fresh.
-  const [state, setState] = useState(() => loadState(INITIAL_STATE));
+  // Start blank; resume a saved season once the repository resolves. The
+  // load is async-friendly (a network adapter will genuinely await it), but
+  // the local adapter settles on a microtask, so kicking it off in a layout
+  // effect — which runs before the browser paints — means the very first
+  // paint already shows the restored season rather than a blank flash.
+  //
+  // An adapter with synchronous storage seeds the first render directly, so
+  // there is no flash of the setup screen before the season appears. Adapters
+  // without loadSync (anything network-backed) start blank and hydrate below.
+  const [state, setState] = useState(() =>
+    repository.loadSync ? repository.loadSync() || INITIAL_STATE : INITIAL_STATE,
+  );
+  const [hydrated, setHydrated] = useState(() => !!repository.loadSync);
+
+  useLayoutEffect(() => {
+    if (repository.loadSync) return undefined; // already seeded synchronously
+    let cancelled = false;
+    repository
+      .load()
+      .then((loaded) => {
+        if (cancelled) return;
+        if (loaded) setState(loaded);
+      })
+      .catch(() => {
+        /* best-effort: fall back to a blank season */
+      })
+      .finally(() => {
+        if (!cancelled) setHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Actions are memoised once, so the few that need to *read* current state
   // outside of an updater (to fire a toast, say) go through this ref.
@@ -42,10 +78,15 @@ export function useGame() {
     [],
   );
 
-  // Persist whenever the durable slice of state changes.
+  // Persist whenever the durable slice of state changes — but never before
+  // the initial load has settled. Saving the blank starting state while a
+  // real season is still being restored would overwrite it before it ever
+  // loads, which is exactly the "lost the first save" failure this guards
+  // against.
   useEffect(() => {
-    saveState(state);
-  }, [state]);
+    if (!hydrated) return;
+    repository.save(state);
+  }, [state, hydrated]);
 
   // Ask once for eviction protection. Not a guarantee, and it does not
   // survive uninstalling the app — export remains the only real backup.
@@ -408,8 +449,8 @@ export function useGame() {
       },
 
       /** Offer whatever unreadable payload was preserved on a failed load. */
-      importPreserved: () => {
-        const raw = getPreserved();
+      importPreserved: async () => {
+        const raw = await repository.getPreserved();
         if (!raw) return;
         const result = parseSeasonFile(raw);
         if (!result.ok) {
@@ -420,7 +461,7 @@ export function useGame() {
       },
 
       dismissPreserved: () => {
-        clearPreserved();
+        repository.clearPreserved();
         patch({ importError: null });
       },
 
