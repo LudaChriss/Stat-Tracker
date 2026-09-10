@@ -5,6 +5,7 @@ import { PlayerFormSheet } from '../components/FormSheet.jsx';
 import { NameSheet, ResetConfirmSheet } from '../components/ResetSheets.jsx';
 import ImportSheet from '../components/ImportSheet.jsx';
 import RecordSheet from '../components/RecordSheet.jsx';
+import BackfillSheet from '../components/BackfillSheet.jsx';
 
 /** Manage our own roster. Season stats come from played games, so removing a
  *  player here never rewrites the games they already appear in. */
@@ -216,6 +217,33 @@ export default function RosterEditor({ v, actions }) {
           the app or clearing site data will take the season with it.
         </div>
 
+        {v.canBackfill && (
+          <>
+            <button
+              onClick={actions.openBackfill}
+              style={{
+                width: '100%',
+                marginTop: 10,
+                background: '#fff',
+                border: `1.5px solid ${C.stroke}`,
+                color: C.header,
+                borderRadius: 13,
+                padding: 14,
+                minHeight: 48,
+                fontSize: 14.5,
+                fontWeight: 800,
+                ...btn,
+              }}
+            >
+              ⇪ Send past games to my account
+            </button>
+            <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+              Games you finished before this phone was connected to an account live only here.
+              This sends them, one at a time, and tells you exactly what it did.
+            </div>
+          </>
+        )}
+
         <input
           ref={fileRef}
           type="file"
@@ -337,6 +365,7 @@ export default function RosterEditor({ v, actions }) {
       </div>
 
       {v.recordEditor && <RecordSheet v={v} actions={actions} />}
+      {v.backfill && <BackfillSheet v={v} actions={actions} />}
       {v.importPreview && <ImportSheet v={v} actions={actions} />}
       {v.resetFlow === 'confirm' && <ResetConfirmSheet v={v} actions={actions} />}
       {v.resetFlow === 'name' && (

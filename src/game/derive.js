@@ -474,6 +474,10 @@ export function deriveView(s, actions) {
       };
     }),
     resetFlow: s.resetFlow,
+    // The button only exists on an adapter that can actually send games, so
+    // local-only mode never shows it.
+    canBackfill: !!(actions.hasBackfill && actions.hasBackfill()),
+    backfill: s.backfill,
     importPreview: s.importPreview,
     importError: s.importError,
     hasPreserved: !!getPreserved(),

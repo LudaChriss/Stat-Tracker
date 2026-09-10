@@ -3,7 +3,9 @@
 All six slices done, plus one slice pulled forward from phase 3: **a game
 finalised on the phone is now written to the account.**
 
-**636 assertions, 22 suites, build clean, viewport audit clean** (56
+Plus the backfill for games finalised before that slice, now built.
+
+**690 assertions, 23 suites, build clean, viewport audit clean** (56
 screen×viewport combinations, no overflow, no tap target under 44px).
 Nothing is blocked. Do not push before reading §5.
 
@@ -248,31 +250,86 @@ stays in charge — you will see a message saying so.
 - The email template, environment variables and redeploy from §4 steps 4-6 are
   already done and must not be redone.
 
-## 6. Recommended next, not built: a backfill for older games
+## 6. Sending past games to your account
 
-`save_game` fires when a game is finalised. Games already in your history when
-it shipped were never offered to it, so they stay on the device. That is not a
-bug and nothing is lost — they are in the standings, in the box scores, and in
-an export — but the account does not have them.
+`save_game` fires on finalisation, so games already in the history when it
+shipped were never offered to it. **Manage roster → Send past games to my
+account** sends them. It is a button, never automatic.
 
-**Recommendation: a one-tap "Send past games to my account" in Manage roster,
-next to Export.** It would walk the local history, skip anything already in
-`score-tracker:syncedGames`, and enqueue the rest through exactly the path a
-freshly finalised game takes. No new database function: `save_game` is already
-idempotent by `(created_by, client_id)`, so running it twice is harmless, and it
-already refuses anything that does not look like a finished game.
+- **One at a time, in order, stopping at the first failure**, naming the game
+  and the reason. Nothing after it is attempted. What went before is marked
+  sent, so fixing the problem and running it again resumes rather than restarts.
+- **A pre-flight before anything is written.** Every candidate is checked
+  locally against the same four refusals `save_game` enforces, so games that
+  cannot be sent are named up front — not discovered at game seven of twelve.
+  They are listed before the run and still listed after it.
+- **It cannot duplicate anything.** `save_game` is idempotent on
+  `(created_by, client_id)` and `import_season` writes the same key, so a game
+  the one-time import already put in the account resolves to the same row.
+  Verified against the real database: re-sending returned the same row id, the
+  game count did not move and the box score was replaced, not duplicated.
+- **It refuses to start** when writes are still queued (jumping the queue would
+  break its ordering promise), when there is no connection, or when the device
+  is not signed in — and says which.
+- **It tells you to export first**, because this is exactly what an export
+  protects against.
 
-Deliberately **not** built now, for two reasons:
+Deliberately not done: it does not repair the legacy records it refuses. See
+§7.
 
-- It writes many games at once against a guard whose refusals have been
-  exercised on one game at a time. A batch that half-succeeds needs its own
-  answer, and inventing one at the end of a slice is how the roster got wiped.
-- You have one real season and it has already been through a data-loss scare.
-  A bulk write into the account is exactly the operation to do deliberately,
-  with an export in hand, not as an afterthought.
+## 7. Legacy records: a local data bug, not a backfill problem
 
-If you want it, it is small — an afternoon, most of it tests for the partial
-failure case.
+Two shapes in stored history are refused by `save_game`, and both are wrong on
+the phone today whether or not they are ever sent:
+
+- **A level game recorded as a win or a loss.** The original engine used `>=`,
+  so a tie scored as a win. This is wrong in the standings right now.
+- **A game with no score at all.** `migrateGame` fills a missing score with
+  0-0 but does not recompute `result`, leaving a stale W or L against 0-0.
+
+**Are they distinguishable?** From a genuine 0-0 tie, yes — that carries
+`result: 'T'`. From each other, **no**, and this is worth knowing: once a
+season has been loaded and saved even once, `migrateGame` has already replaced
+the missing score with 0-0, so "a 0-0 game stored as a win" and "a game whose
+score was never recorded" are the same bytes. The distinction is not
+recoverable after the fact.
+
+`legacyResultReport()` in `src/data/backfill.js` counts all three figures
+(`tieStoredAsDecision`, `zeroZeroWithDecision`, `missingScore`). The backfill
+sheet already names each offending game on screen.
+
+**Recommended, not built: an explicit repair step** that recomputes `result`
+from `score` for exactly these records. It is a few lines, but it rewrites
+history, so it wants to be a deliberate action with an export in hand and its
+own confirmation naming every game it would change — not something a bulk send
+does on the way past.
+
+## 8. Found while building this: a device-only game can be erased
+
+**Not fixed, because it is outside what was asked for, and it is a real data
+loss path.**
+
+`load()` merges the account's season over the local one and then mirrors the
+result back to localStorage (`supabaseRepository.js`). History comes from the
+account, so a game that exists only on the device is dropped from the running
+state *and overwritten in localStorage*. Verified through the real storage API
+against a real database: a game present on the device and absent from the
+account was gone from `localStorage` after one `load()`.
+
+This matters in one concrete window: **if the new client code is deployed
+before `_013` is pushed**, a finalised game sits in the write queue (transient,
+as established in §4) while the next reload wipes it from the visible history.
+The queue still replays it later, so the account eventually gets it — but the
+phone stops showing it in the meantime, which looks exactly like data loss.
+
+It also sits awkwardly against the standing rule that adopting the account's
+season must not modify local data.
+
+**Recommended fix:** when merging, keep any local game whose id the account
+does not have, rather than letting the account's history replace the device's
+wholesale. That turns this case into precisely what the backfill is for. It
+needs its own review because it changes what "the account is authoritative"
+means.
 
 ---
 
@@ -340,6 +397,7 @@ the whole sign-in → migrate → offline → replay flow, in a real browser.
 | 3c | Concurrency: chosen strategy documented and tested | todo |
 | 3d | Cancel / undo / finalize correct in the shared model | todo |
 | — | **Pulled forward: a finalized game is written to the backend** | **green** |
+| — | **Pulled forward: past games can be sent to the backend on demand** | **green** |
 
 ### What was pulled forward, and what it is not
 
@@ -363,7 +421,8 @@ lost or reinstalled phone, and it needs none of the machinery below.
 - **Undo and cancel in the shared model (3d).** Undo and cancel work on the
   device exactly as before, but a game already written to the account is not
   reopened, retracted or deleted by them.
-- **Backfill.** Games finalised before this exist only on the device.
+- **Backfill.** Built since, as a manual button — see §6. Still deferred: it
+  reaches only what the app currently shows as history (see §8).
 
 ## Phase 4 — Multi-team and multi-league
 
@@ -389,7 +448,7 @@ lost or reinstalled phone, and it needs none of the machinery below.
 | 6a | Full regression across all phases on iPhone viewports | todo |
 | 6b | Offline behaviour | **partial**. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Extended since: a game finalised with the network cut is queued, not lost, and is delivered on reconnect — verified in a browser. Remaining: offline *mid-game* (that is the event log, phase 3), surfacing parked writes in the UI, and the recovery flow for them |
 | 6c | Error boundaries, empty states, loading states everywhere data is fetched | todo |
-| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Done in the pulled-forward phase 3 slice: a game finalised while signed in is written to the account and verified on read-back. Remaining: **no backfill** for games finalised before that slice — they stay on the device |
+| 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Done in the pulled-forward phase 3 slice: a game finalised while signed in is written to the account and verified on read-back, and a manual backfill sends games finalised before it. Remaining: repairing legacy records that cannot be sent (§7), and the merge that can drop a device-only game (§8) |
 
 ---
 
@@ -485,6 +544,26 @@ here:
 The game is written **without a coalesce key**, unlike a season snapshot. A
 season snapshot supersedes the previous one; a game is an append and must never
 be coalesced away by a save that happens to follow it.
+
+### D9 — A bulk send is a foreground action, not a queued one
+
+Finalising a game enqueues it and forgets about it; that is right for a phone
+at a field. The backfill deliberately does the opposite — it writes directly,
+one game at a time, awaiting each — because its entire purpose is to be able to
+say how far it got and what stopped it. A fire-and-forget bulk send that quietly
+parks four of twelve writes answers none of that.
+
+Two consequences, both accepted on purpose:
+
+- It **refuses to start with no connection** rather than queueing a dozen games
+  for later. Someone who taps a button expecting a summary should not get a
+  silent background job instead.
+- It **refuses to start while the queue has anything in it**, because writing
+  directly would jump ahead of writes already waiting, breaking the strict
+  ordering the queue promises.
+
+It also never repairs anything on the way past. A game it cannot send is named
+and left exactly as it is; rewriting history is a separate, deliberate step.
 
 ### D3 — League visibility is a column, not an assumption
 

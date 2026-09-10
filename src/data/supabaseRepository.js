@@ -20,6 +20,7 @@
 import { rowsToSeason, seasonToRows } from './seasonMapping.js';
 import { createOfflineQueue } from './offlineQueue.js';
 import { verifyGame } from './seasonSync.js';
+import { planBackfill } from './backfill.js';
 
 const SAVE_DEBOUNCE_MS = 1200;
 const SYNCED_GAMES_KEY = 'score-tracker:syncedGames';
@@ -126,6 +127,32 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
     );
   }
 
+  /**
+   * One game as the app would show it. `writeGame` used to verify by fetching
+   * the entire season — five queries plus every box-score line — after every
+   * single write, which a backfill would repeat once per game.
+   *
+   * `rowsToSeason` needs only the games and their lines to build history;
+   * `myTeamId` is what decides which side of the row is us.
+   */
+  async function fetchGame(teamId, clientId) {
+    const games = await client
+      .from('games')
+      .select('*')
+      .eq('client_id', clientId)
+      .or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`);
+    if (games.error) throw games.error;
+
+    const row = (games.data || [])[0];
+    if (!row) return null;
+
+    const lines = await client.from('game_lines').select('*').eq('game_id', row.id);
+    if (lines.error) throw lines.error;
+
+    const season = rowsToSeason({ games: [row], gameLines: lines.data || [] }, { myTeamId: teamId });
+    return (season.history || [])[0] || null;
+  }
+
   async function writeSeason(state) {
     const teamId = getTeamId();
     if (!teamId) return;
@@ -155,8 +182,7 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
     const { error } = await client.rpc('save_game', { p_team_id: teamId, payload: record });
     if (error) throw error;
 
-    const season = await fetchSeason(teamId);
-    const readBack = (season && season.history ? season.history : []).find((g) => g.id === record.id);
+    const readBack = await fetchGame(teamId, record.id);
     const verdict = verifyGame(record, readBack);
 
     if (!verdict.ok) {
@@ -172,6 +198,26 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
     markGameSynced(record.id);
   }
 
+  /**
+   * Why a bulk send cannot start right now, or null if it can.
+   *
+   * Both refusals are deliberate. The queue is strictly ordered and stops at
+   * the first failure; a foreground backfill writing directly would jump ahead
+   * of writes that are already waiting. And a backfill is a deliberate action
+   * with a summary at the end — quietly queueing a dozen games for later is not
+   * what someone who tapped this button asked for.
+   */
+  function backfillBlockedBecause() {
+    if (!getTeamId()) return 'this device is not signed in to an account yet';
+    if (writes.list().length || writes.parked().length) {
+      return 'there are still changes waiting to sync — reconnect and let those finish first';
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return 'there is no connection right now';
+    }
+    return null;
+  }
+
   return {
     /** Persist one finalized game. Only ever called on finalization. */
     saveGame(record) {
@@ -183,6 +229,81 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
 
     /** Which games this device has confirmed are in the account. */
     syncedGames: () => readSyncedGames(),
+
+    /**
+     * What a bulk send would do, worked out before anything is written.
+     *
+     * The local half is pure (`planBackfill`); the one query here exists only
+     * to label each candidate "new" or "already there", so the summary can say
+     * which writes create a row and which update one in place.
+     */
+    async backfillPlan(history) {
+      const teamId = getTeamId();
+      const synced = readSyncedGames();
+
+      let remoteIds = null;
+      if (teamId) {
+        const games = await client
+          .from('games')
+          .select('client_id')
+          .or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`);
+        // A failed lookup only costs the create/update label, so it is not
+        // worth failing the whole pre-flight over.
+        if (!games.error) remoteIds = new Set((games.data || []).map((g) => g.client_id).filter(Boolean));
+      }
+
+      return { ...planBackfill(history, synced, remoteIds), blockedBecause: backfillBlockedBecause() };
+    },
+
+    /**
+     * Send past games, one at a time, in order, stopping at the first failure.
+     *
+     * Deliberately NOT through the write queue. The queue is fire-and-forget,
+     * which is right for a game finalised at the field and wrong here: this is
+     * a foreground action whose whole point is to say exactly how far it got
+     * and exactly what stopped it. Every game that succeeds is marked synced as
+     * it goes, so stopping is never ambiguous and re-running resumes.
+     */
+    async backfillGames(candidates, { onProgress } = {}) {
+      const teamId = getTeamId();
+      const blocked = backfillBlockedBecause();
+      if (blocked) return { ok: false, sent: [], stoppedAt: null, error: blocked, refusedToStart: true };
+
+      const records = (candidates || []).map((c) => (c && c.game ? c.game : c));
+      const sent = [];
+
+      for (let i = 0; i < records.length; i++) {
+        const record = records[i];
+        if (onProgress) onProgress({ done: i, total: records.length, current: record });
+
+        try {
+          const { error } = await client.rpc('save_game', { p_team_id: teamId, payload: record });
+          if (error) throw error;
+
+          const readBack = await fetchGame(teamId, record.id);
+          const verdict = verifyGame(record, readBack);
+          if (!verdict.ok) {
+            throw new Error(`it read back differently from the account (${verdict.differences.join('; ')})`);
+          }
+
+          markGameSynced(record.id);
+          sent.push(record.id);
+        } catch (err) {
+          // Stop dead. Everything before this is sent and marked; everything
+          // after is untouched and still on the device.
+          return {
+            ok: false,
+            sent,
+            stoppedAt: record,
+            error: (err && err.message) || String(err),
+            remaining: records.length - i,
+          };
+        }
+      }
+
+      if (onProgress) onProgress({ done: records.length, total: records.length, current: null });
+      return { ok: true, sent, stoppedAt: null, error: null };
+    },
 
     // The local mirror reads synchronously, so the first paint shows the last
     // known season instead of a blank screen while the network load runs.

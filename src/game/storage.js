@@ -38,6 +38,7 @@ const TRANSIENT = {
   selRunner: null,
   importPreview: null,
   importError: null,
+  backfill: null,
   synced: true,
 };
 

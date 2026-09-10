@@ -491,6 +491,61 @@ export function useGame(injectedRepository) {
       confirmImport: () =>
         setState((s) => (s.importPreview ? applySeason(s, s.importPreview.season) : s)),
 
+      // ---- Sending past games to the account -------------------------------
+      // Games finalised before the app could write them anywhere exist only on
+      // this device. This is the one path that sends them, and it is never
+      // automatic: it runs when someone taps it, and it says exactly how far it
+      // got.
+      /** Whether this device's adapter can send games at all. */
+      hasBackfill: () => !!repository.backfillGames,
+
+      openBackfill: async () => {
+        if (!repository.backfillPlan) return;
+        patch({ backfill: { phase: 'loading' } });
+        try {
+          const plan = await repository.backfillPlan(stateRef.current.history);
+          patch({ backfill: { phase: 'preflight', ...plan } });
+        } catch (err) {
+          patch({
+            backfill: { phase: 'preflight', sendable: [], blocked: [], alreadySent: 0,
+              blockedBecause: (err && err.message) || 'the account could not be reached' },
+          });
+        }
+      },
+
+      closeBackfill: () => patch({ backfill: null }),
+
+      runBackfill: async () => {
+        const current = stateRef.current.backfill;
+        if (!current || !repository.backfillGames) return;
+        const candidates = current.sendable || [];
+        if (!candidates.length) return;
+
+        patch({
+          backfill: { ...current, phase: 'running', progress: { done: 0, total: candidates.length } },
+        });
+
+        const result = await repository.backfillGames(candidates, {
+          onProgress: (progress) =>
+            setState((s) => (s.backfill ? { ...s, backfill: { ...s.backfill, progress } } : s)),
+        });
+
+        setState((s) =>
+          s.backfill
+            ? { ...s, backfill: { ...s.backfill, phase: result.ok ? 'done' : 'stopped', result } }
+            : s,
+        );
+
+        if (result.ok) {
+          toast(
+            candidates.length === 1
+              ? 'Sent 1 past game to your account'
+              : `Sent ${candidates.length} past games to your account`,
+            3200,
+          );
+        }
+      },
+
       openReset: () => patch({ resetFlow: 'confirm' }),
       openRename: () => patch({ resetFlow: 'rename' }),
       openRecordEditor: () => patch({ recordEditor: true }),

@@ -115,6 +115,7 @@ export const INITIAL_STATE = {
   editTeamId: null,
   resetFlow: null,
   recordEditor: false,
+  backfill: null,
   confirmCancelGame: false,
   importPreview: null,
   importError: null,
