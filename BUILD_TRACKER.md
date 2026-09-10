@@ -38,7 +38,7 @@ only ever go up.
 | 1a | Schema migrations: leagues, teams, players, games, game_events, game_lines, memberships, invites, profiles | **green** |
 | 1b | RLS policies + a policy test harness proving each role's reach | in progress |
 | 1c | Repository abstraction; local adapter preserves today's behaviour exactly | **green** |
-| 1d | Supabase adapter: state ⇄ rows mapping, both directions | todo |
+| 1d | Supabase adapter: state ⇄ rows mapping, both directions | mapping **green**; adapter written, tested against a fake client, awaiting RLS for a real-DB test |
 | 1e | "Import my existing data": export JSON → backend as my team | todo |
 | 1f | Wire the app to the repository; localStorage demoted to offline cache/queue | todo |
 
@@ -124,6 +124,26 @@ is viable and the failing health check is cosmetic.
 Start the local stack with:
 
     npx supabase start --ignore-health-check
+
+### D5 — Scorebook pids are persisted, not re-derived
+
+The engine keys every stat line by a pid (`h0`, `a3`, `o:slug:2`). Those are
+stored as real columns rather than reconstructed on read: an anonymous opponent
+slot has no player row to derive from, and a rostered player may since have
+been renamed or removed. Verified by round-tripping through only the real
+column set — before this, roster ids and every pid came back null.
+
+### D6 — An unreachable backend never presents an empty season
+
+If the network fails, the adapter falls back to the local mirror rather than
+returning nothing. "No data" and "cannot reach the server" look identical to
+someone at a field with no signal, and the reasonable response to the former is
+to start re-entering a roster that already exists. Every successful load is
+mirrored locally so a cold start with no signal still works.
+
+Season writes are debounced upserts. Play-by-play is deliberately NOT routed
+this way — that goes through the append-only event log in phase 3, because a
+live game produces events every few seconds from several phones at once.
 
 ### D3 — League visibility is a column, not an assumption
 
