@@ -36,7 +36,7 @@ only ever go up.
 | Slice | Description | Status |
 |---|---|---|
 | 1a | Schema migrations: leagues, teams, players, games, game_events, game_lines, memberships, invites, profiles | **green** |
-| 1b | RLS policies + a policy test harness proving each role's reach | in progress |
+| 1b | RLS policies + a policy test harness proving each role's reach | **green** |
 | 1c | Repository abstraction; local adapter preserves today's behaviour exactly | **green** |
 | 1d | Supabase adapter: state ⇄ rows mapping, both directions | mapping **green**; adapter written, tested against a fake client, awaiting RLS for a real-DB test |
 | 1e | "Import my existing data": export JSON → backend as my team | todo |
@@ -144,6 +144,14 @@ mirrored locally so a cold start with no signal still works.
 Season writes are debounced upserts. Play-by-play is deliberately NOT routed
 this way — that goes through the append-only event log in phase 3, because a
 live game produces events every few seconds from several phones at once.
+
+### D7 — Creating a league or team makes you its administrator, atomically
+
+Neither can be created by a plain INSERT. Both go through a `SECURITY DEFINER`
+function that creates the row and the creator's membership together, so a team
+without a manager or a league without an admin is unreachable. This also closes
+the privilege-escalation route: there is no INSERT policy on `memberships` at
+all, and the only other way to gain one is `accept_invite`.
 
 ### D3 — League visibility is a column, not an assumption
 
