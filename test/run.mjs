@@ -18,7 +18,15 @@ for (const suite of suites) {
     failed += bad.length || 1;
     console.log(`FAIL ${suite}`);
     bad.forEach((l) => console.log('     ' + l));
-    if (run.stderr) console.log('     ' + run.stderr.split('\n')[0]);
+    // Print enough of stderr to actually diagnose a failure. One line is
+    // usually just the file:line, which says nothing about why.
+    if (run.stderr) {
+      run.stderr
+        .split('\n')
+        .filter((l) => l.trim())
+        .slice(0, 6)
+        .forEach((l) => console.log('     ' + l));
+    }
   } else {
     console.log(`ok   ${suite.padEnd(20)} ${String(passed).padStart(3)} assertions`);
   }

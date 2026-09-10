@@ -31,6 +31,38 @@ export const SUPABASE_ANON_KEY = readEnv('VITE_SUPABASE_ANON_KEY');
 /** Whether a backend is configured. False means run purely on local storage. */
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+/** Exactly which variables are missing, so an error can name them. */
+export function missingEnvVars() {
+  const missing = [];
+  if (!SUPABASE_URL) missing.push('VITE_SUPABASE_URL');
+  if (!SUPABASE_ANON_KEY) missing.push('VITE_SUPABASE_ANON_KEY');
+  return missing;
+}
+
+/**
+ * A production build with no backend configured is a deployment mistake, not a
+ * mode. It must stop and say so rather than start up and show an empty season,
+ * which is indistinguishable from having lost the data.
+ *
+ * Development still runs local-only on purpose — that is the mode the whole app
+ * was built in, and it has to keep working without a backend.
+ */
+export function isProduction() {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) return !!import.meta.env.PROD;
+  } catch {
+    /* not a Vite build */
+  }
+  return false;
+}
+
+export function backendConfigError() {
+  const missing = missingEnvVars();
+  if (!missing.length) return null;
+  if (!isProduction()) return null;
+  return missing;
+}
+
 let client = null;
 
 /** The shared client, or null when no backend is configured. */

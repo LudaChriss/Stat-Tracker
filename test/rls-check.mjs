@@ -34,6 +34,13 @@ try {
 
 const PREFIX = 'RLS Test';
 const EMAIL_PREFIX = 'rls-test-';
+// Unique per run. Previously these were fixed addresses, cleaned up beforehand
+// by listing users and deleting the stale ones — but listUsers is paginated and
+// defaults to 50 per page, so once other suites had created enough users the
+// stale ones fell off page one, survived the cleanup, and the next createUser
+// failed on a duplicate email. That looked like flakiness under load; it was a
+// suite that could not be run twice against a database anyone else was using.
+const RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const PASSWORD = 'rls-test-password-123!';
 
 const admin = createClient(API_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -74,7 +81,7 @@ async function cleanup() {
 }
 
 async function makeUser(handle) {
-  const email = `${EMAIL_PREFIX}${handle}@example.test`;
+  const email = `${EMAIL_PREFIX}${handle}-${RUN_ID}@example.test`;
   const { data, error } = await admin.auth.admin.createUser({ email, password: PASSWORD, email_confirm: true });
   if (error) throw new Error(`createUser(${handle}): ${error.message}`);
   const id = data.user.id;

@@ -2,6 +2,8 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
+import ConfigError from './components/ConfigError.jsx';
+import { backendConfigError } from './data/supabaseClient.js';
 import './styles.css';
 
 // Register the offline shell. Dev is excluded so Vite's HMR assets are never
@@ -18,10 +20,14 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
   });
 }
 
+// A production build with no backend configured stops here and says so, rather
+// than starting up and showing an empty season.
+const configError = backendConfigError();
+
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      {configError ? <ConfigError missing={configError} /> : <App />}
     </ErrorBoundary>
   </React.StrictMode>,
 );
