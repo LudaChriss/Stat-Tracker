@@ -55,11 +55,17 @@
 // "our lineup" vs "the opponent's lineup" (see game/logic.js buildGameRecord
 // -- our lineup is unconditionally tagged 'home', the opponent's
 // unconditionally 'away', regardless of which physical team the history
-// record's own `home` flag says we were). This module maps that string
-// directly onto game_lines.home_away with no re-derivation, which keeps the
-// transform trivially bijective and keeps the two independent facts (which
-// side of the book a line was written on, vs. which team physically hosted
-// the game) from getting tangled together.
+// record's own `home` flag says we were).
+//
+// game_lines.home_away means something different: which side of THE GAME the
+// line belongs to. The two coincide for a home game and invert for an away
+// one, so this module converts between them in both directions.
+//
+// Mapping the client's string straight onto the column is tempting — it makes
+// the transform trivially bijective — but it is wrong twice over: it disagrees
+// with the server-side importer, which writes the column correctly, and it
+// makes a game unreadable from the opponent's side, which multi-team views
+// need. A round trip that only has to agree with itself will not catch it.
 // ---------------------------------------------------------------------------
 
 import { isHomePid, isOppPid, parseOppPid } from './ids.js';
@@ -92,6 +98,15 @@ const sortByOrder = (arr) => [...arr].sort((a, b) => (a.sort_order || 0) - (b.so
 // ---------------------------------------------------------------------------
 
 /**
+ * The same result seen from the other dugout. A tie is a tie either way.
+ *
+ * Needed because a game row records its result from the HOME team's point of
+ * view — a game belongs to two teams, so "W" has to mean something absolute —
+ * while the client records it from its own.
+ */
+const flipResult = (r) => (r === 'W' ? 'L' : r === 'L' ? 'W' : r);
+
+/**
  * Flatten a client season slice into the row shapes the `teams` / `players` /
  * `games` / `game_lines` tables expect.
  *
@@ -106,6 +121,7 @@ const sortByOrder = (arr) => [...arr].sort((a, b) => (a.sort_order || 0) - (b.so
  */
 export function seasonToRows(state, { myTeamId, leagueId = null } = {}) {
   const s = state || {};
+
   const myTeam = s.myTeam || { name: '', priorW: 0, priorL: 0, priorT: 0 };
   const roster = s.roster || [];
   const oppTeams = s.teams || [];
@@ -197,7 +213,10 @@ export function seasonToRows(state, { myTeamId, leagueId = null } = {}) {
       innings: h.innings,
       home_score: weAreHome ? h.score.us : h.score.them,
       away_score: weAreHome ? h.score.them : h.score.us,
-      result: h.result,
+      // The row records the result from the HOME team's point of view, because
+      // a game belongs to two teams and "W" has to mean something absolute.
+      // The client records it from its own, so an away game flips.
+      result: weAreHome ? h.result : flipResult(h.result),
       // Extra, non-column fields -- see the file header.
       client_id: h.id,
       client_opponent_id: h.opponentId,
@@ -226,7 +245,12 @@ export function seasonToRows(state, { myTeamId, leagueId = null } = {}) {
         team_id: teamId,
         player_id: playerId,
         name_snapshot: l.name,
-        home_away: l.team,
+        // The client's `team` means OUR side vs theirs; the column means the
+        // game's home side. On an away game our own players are the away team,
+        // and copying the field through would file them as the home side —
+        // which the server-side importer, writing the same column correctly,
+        // would then disagree with.
+        home_away: (l.team === 'home') === weAreHome ? 'home' : 'away',
         ab: l.ab || 0,
         h: l.h || 0,
         r: l.r || 0,
@@ -303,7 +327,10 @@ export function rowsToSeason(rows, defaults = {}) {
     const lines = (linesByGame.get(g.id) || []).map((gl) => ({
       pid: gl.client_pid,
       name: gl.name_snapshot,
-      team: gl.home_away,
+      // home_away is relative to the GAME; the client's `team` is relative to
+      // US. On an away game our own players carry home_away 'away', and
+      // copying it straight through would file them as the opposition.
+      team: (gl.home_away === 'home') === home ? 'home' : 'away',
       ab: gl.ab,
       h: gl.h,
       r: gl.r,
@@ -323,7 +350,8 @@ export function rowsToSeason(rows, defaults = {}) {
       date: g.scheduled_at.slice(0, 10),
       label: g.label,
       score,
-      result: g.result,
+      // Back from the home team's point of view to ours.
+      result: home ? g.result : flipResult(g.result),
       sport: g.sport,
       innings: g.innings,
       lines,

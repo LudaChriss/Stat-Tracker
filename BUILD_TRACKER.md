@@ -38,8 +38,8 @@ only ever go up.
 | 1a | Schema migrations: leagues, teams, players, games, game_events, game_lines, memberships, invites, profiles | **green** |
 | 1b | RLS policies + a policy test harness proving each role's reach | **green** |
 | 1c | Repository abstraction; local adapter preserves today's behaviour exactly | **green** |
-| 1d | Supabase adapter: state ⇄ rows mapping, both directions | mapping **green**; adapter written, tested against a fake client, awaiting RLS for a real-DB test |
-| 1e | "Import my existing data": export JSON → backend as my team | todo |
+| 1d | Supabase adapter: state ⇄ rows mapping, both directions | **green** (verified against the real database) |
+| 1e | "Import my existing data": export JSON → backend as my team | **green** |
 | 1f | Wire the app to the repository; localStorage demoted to offline cache/queue | todo |
 
 ## Phase 2 — Accounts and roles

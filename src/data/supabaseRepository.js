@@ -37,7 +37,14 @@ export function createSupabaseRepository(client, { getTeamId, cache = null } = {
     const [team, players, opponentTeams, games] = await Promise.all([
       client.from('teams').select('*').eq('id', teamId).maybeSingle(),
       client.from('players').select('*').eq('team_id', teamId).order('sort_order'),
-      client.from('teams').select('*, players(*)').neq('id', teamId),
+      // Deliberately not "every team except mine": row-level security decides
+      // what is visible, and asking for everything would sweep in every team
+      // of every public league. Scoped to teams this user actually belongs to,
+      // then our own is filtered out below.
+      client
+        .from('teams')
+        .select('*, players(*), memberships!inner(user_id)')
+        .neq('id', teamId),
       client.from('games').select('*').or(`home_team_id.eq.${teamId},away_team_id.eq.${teamId}`),
     ]);
 
