@@ -89,7 +89,10 @@ and these 11 functions —
 `handle_new_user`, `create_team_with_manager`, `create_league_with_admin`,
 `claim_primary_team`, `set_primary_team`, `league_is_readable`,
 `fill_game_team_snapshots`, `import_season`, `import_season_and_claim`,
-`discard_import`, `save_season`.
+`discard_import`, `save_season` — plus the eight RLS helpers
+`is_team_member`, `is_league_admin`, `is_league_member`, `can_manage_team`,
+`can_score_game`, `can_score_teams`, `game_is_readable` and `accept_invite`,
+which is 19 security-definer functions in all.
 
 `db push` will list what it is about to apply and ask to confirm. It only ever
 applies migrations the remote has not seen.
@@ -106,9 +109,25 @@ select count(*) as functions from pg_proc p
   where n.nspname = 'public' and p.prosecdef;
 ```
 
-Expect **9 tables, 27 policies, 11 security-definer functions**. If any number
-is short, stop — the app will half-work in confusing ways rather than fail
-cleanly.
+Expect **9 tables, 26 policies, 19 security-definer functions** (20 public
+functions in total — the 20th, `set_updated_at`, is a plain trigger function).
+If any number is short, stop — the app will half-work in confusing ways rather
+than fail cleanly.
+
+Two of those numbers were wrong in an earlier version of this checklist, and
+both errors are worth remembering:
+
+- **26, not 27.** The 27th was `leagues_insert_authenticated`, which migration
+  `20260101000005` deliberately drops: a league must be created through
+  `create_league_with_admin` so its creator becomes its admin atomically. The
+  figure 27 came from a subagent's report, was correct when written, and went
+  stale the moment a later migration removed a policy.
+- **19, not 11.** The 11 was produced by grepping the migrations for
+  `create or replace function public.`, which silently missed the eight
+  row-level-security helpers (`is_team_member`, `is_league_admin`,
+  `is_league_member`, `can_manage_team`, `can_score_game`, `can_score_teams`,
+  `game_is_readable`, `accept_invite`). Counting source text is not counting
+  what the database has.
 
 ### 4. ⚠️ Change the sign-in email template — THE STEP THAT SILENTLY BREAKS SIGN-IN
 
