@@ -21,6 +21,8 @@ import { NameSheet } from './components/ResetSheets.jsx';
 import SignIn from './screens/SignIn.jsx';
 import SyncPrompt from './components/SyncPrompt.jsx';
 import { useBackend } from './data/useBackend.js';
+import AccountBar from './components/AccountBar.jsx';
+import SignOutSheet from './components/SignOutSheet.jsx';
 import { useSignInForm } from './data/useSignInForm.js';
 
 const SCREENS = {
@@ -68,7 +70,7 @@ function useFullBleed() {
   return installed || iosStandalone || narrow;
 }
 
-function GameApp({ repository, backend }) {
+function GameApp({ repository, backend, onSignIn, onSignOut }) {
   const { state, actions } = useGame(repository);
   const v = useMemo(() => deriveView(state, actions), [state, actions]);
 
@@ -91,7 +93,11 @@ function GameApp({ repository, backend }) {
         paddingBottom: 'var(--safe-bottom)',
       }}
     >
-      <Screen v={v} actions={actions} />
+      <AccountBar status={backend.status} onSignIn={onSignIn} />
+      <Screen
+        v={{ ...v, account: { status: backend.status, email: (backend.session && backend.session.user && backend.session.user.email) || null } }}
+        actions={{ ...actions, openSignOut: onSignOut, openSignIn: onSignIn }}
+      />
       {v.needsSetup && (
         <NameSheet
           title="Welcome — what's your team called?"
@@ -129,20 +135,51 @@ function GameApp({ repository, backend }) {
 export default function App() {
   const backend = useBackend();
   const signIn = useSignInForm(backend.actions.auth);
+  // Sign-in is a screen the app can show, not a gate it sits behind. Being
+  // signed out is a fact about syncing; the season is on the phone either way.
+  const [showSignIn, setShowSignIn] = useState(false);
+  const [signOutSheet, setSignOutSheet] = useState(null);
+  const [signingOut, setSigningOut] = useState(false);
 
   if (backend.status === 'loading' || backend.status === 'preparing') {
     return <Splash label={backend.status === 'preparing' ? 'Checking your season…' : 'Loading…'} />;
   }
 
-  if (backend.status === 'signed-out') {
-    return <SignIn {...signIn} />;
+  if (showSignIn && backend.status === 'signed-out') {
+    return <SignIn {...signIn} onDismiss={() => setShowSignIn(false)} />;
   }
 
   const repoKey = backend.teamId || 'local';
 
   return (
     <>
-      <GameApp key={repoKey} repository={backend.repository} backend={backend} />
+      <GameApp
+        key={repoKey}
+        repository={backend.repository}
+        backend={backend}
+        onSignIn={() => setShowSignIn(true)}
+        onSignOut={() => setSignOutSheet(backend.actions.unsentWrites())}
+      />
+      {signOutSheet && (
+        <SignOutSheet
+          email={(backend.session && backend.session.user && backend.session.user.email) || null}
+          unsent={signOutSheet}
+          busy={signingOut}
+          onSyncNow={async () => {
+            setSigningOut(true);
+            const left = await backend.actions.syncNow();
+            setSignOutSheet(left);
+            setSigningOut(false);
+          }}
+          onSignOut={async () => {
+            setSigningOut(true);
+            await backend.actions.signOut();
+            setSigningOut(false);
+            setSignOutSheet(null);
+          }}
+          onClose={() => setSignOutSheet(null)}
+        />
+      )}
       {backend.status === 'ask' && backend.choice && (
         <SyncPrompt
           local={backend.choice.local}

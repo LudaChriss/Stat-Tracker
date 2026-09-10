@@ -38,14 +38,27 @@ const eq = (label, got, want) => {
       if (statSync(full).isDirectory()) walk(full);
       else if (/\.(js|jsx)$/.test(entry)) {
         const src = readFileSync(full, 'utf8');
-        // clearPreserved removes the separate recovery key, which is fine.
+        // Two keys may legitimately be removed, and only these two:
+        //   PREVIOUS_KEY     the separate recovery copy (clearPreserved)
+        //   SYNCED_GAMES_KEY the "already in the account" marker, cleared on
+        //                    sign-out because it is a claim about an account we
+        //                    no longer know the identity of. It is not data —
+        //                    re-sending a game is idempotent.
+        // The season and the write queue are never removed by anything.
+        //   USER_KEY         which account this device last spoke to.
+        const ALLOWED = /PREVIOUS_KEY|previous|SYNCED_GAMES_KEY|USER_KEY/;
         const lines = src.split('\n');
         lines.forEach((l, i) => {
-          if (/removeItem\s*\(/.test(l) && !/PREVIOUS_KEY|previous/i.test(l)) {
+          if (/removeItem\s*\(/.test(l) && !ALLOWED.test(l)) {
             offenders.push(`${full.replace(repoRoot, '')}:${i + 1}`);
           }
           if (/localStorage\.clear\s*\(/.test(l)) {
             offenders.push(`${full.replace(repoRoot, '')}:${i + 1} (clear)`);
+          }
+          // Named-key removals of the two that must survive everything,
+          // including sign-out.
+          if (/removeItem\s*\(\s*['"`]score-tracker:(state|queue)['"`]/.test(l)) {
+            offenders.push(`${full.replace(repoRoot, '')}:${i + 1} (season or queue)`);
           }
         });
       }

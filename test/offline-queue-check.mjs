@@ -45,7 +45,8 @@ const reset = () => { store = {}; mode = 'ok'; };
   let result;
   try { result = await q.flush({ event: async () => {} }); } catch { threw = true; }
   eq('flush on empty queue does not throw', threw, false);
-  eq('flush on empty queue is a no-op', result, { applied: [], failed: null, remaining: 0 });
+  eq('flush on empty queue is a no-op', result,
+    { applied: [], failed: null, remaining: 0, heldForOtherAccounts: 0 });
 }
 
 // --- strict ordering: a failure in the middle blocks everything after it ---

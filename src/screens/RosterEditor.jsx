@@ -9,6 +9,19 @@ import BackfillSheet from '../components/BackfillSheet.jsx';
 
 /** Manage our own roster. Season stats come from played games, so removing a
  *  player here never rewrites the games they already appear in. */
+const accountBtn = {
+  flexShrink: 0,
+  background: '#fff',
+  border: `1.5px solid ${C.stroke}`,
+  color: C.header,
+  borderRadius: 99,
+  padding: '0 14px',
+  minHeight: 44,
+  fontSize: 13,
+  fontWeight: 800,
+  ...btn,
+};
+
 export default function RosterEditor({ v, actions }) {
   // A hidden file input is the only way to open the picker from a styled
   // button; the tap has to originate from a real user gesture.
@@ -193,6 +206,37 @@ export default function RosterEditor({ v, actions }) {
           </button>
         </Card>
       </div>
+
+      {v.account && v.account.status !== 'local-only' && (
+        <div style={{ padding: '8px 16px 0' }}>
+          <Section>Account</Section>
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, overflowWrap: 'anywhere' }}>
+                  {v.account.email || 'Not signed in'}
+                </div>
+                <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, marginTop: 2 }}>
+                  {v.account.status === 'stale'
+                    ? 'Signed in, but the account cannot be reached right now.'
+                    : v.account.status === 'signed-out'
+                      ? 'Your season is on this phone only.'
+                      : 'Your season syncs to this account.'}
+                </div>
+              </div>
+              {v.account.status === 'signed-out' ? (
+                <button onClick={actions.openSignIn} style={accountBtn}>
+                  Sign in
+                </button>
+              ) : (
+                <button onClick={actions.openSignOut} style={accountBtn}>
+                  Sign out
+                </button>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
 
       <div style={{ padding: '8px 16px 28px' }}>
         <Section>Season data</Section>

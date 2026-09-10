@@ -5,7 +5,7 @@ finalised on the phone is now written to the account.**
 
 Plus the backfill for games finalised before that slice, now built.
 
-**719 assertions, 24 suites, build clean, viewport audit clean** (56
+**747 assertions, 25 suites, build clean, viewport audit clean** (56
 screen×viewport combinations, no overflow, no tap target under 44px).
 Nothing is blocked. Do not push before reading §5.
 
@@ -403,10 +403,53 @@ the whole sign-in → migrate → offline → replay flow, in a real browser.
 
 ## Phase 2 — Accounts and roles
 
+### 2a — what "signed in" now means
+
+Three states, not two. The middle one is the whole point:
+
+| State | When | What the app does |
+|---|---|---|
+| `ready` | signed in, account reachable | normal |
+| `stale` | a session is on the device but the server did not answer | **keeps the remote repository**, shows the season, finalising still saves and still queues, banner says it cannot reach the account |
+| `signed-out` | nobody signed in, or the server rejected the refresh token | season fully usable, banner offers sign-in |
+
+`stale` deliberately keeps the *remote* repository. The local adapter's
+`saveGame` is a no-op, so swapping to it would mean a game finalised at a field
+never reaches the account at all.
+
+Sign-in is a screen you can reach and leave, never a wall. Being signed out is
+a fact about syncing, not a reason to withhold a season sitting on the phone.
+
+Three things were found and fixed while building this, each in the browser:
+
+- **Opening the app with an unreachable auth server took 26 seconds** before
+  anything rendered — supabase-js retries a failed refresh with backoff. The
+  launch now waits 2.5s and then shows the season anyway; a late answer still
+  upgrades it. Measured again after: 2.9s.
+- **Every token refresh tore the app down to a splash** and re-ran the whole
+  sync reconciliation, unmounting whatever was open. Hourly, in production, and
+  mid-game if the timing landed there. A refreshed token for the same person is
+  no longer news.
+- **Writes queued while stale were not stamped with an account**, because the
+  stale path has no session object to read an id from. The last signed-in user
+  id is now remembered separately for exactly this.
+
+### Queued writes belong to an account
+
+Every queued entry records the user it was queued for. `flush` applies only the
+current user's; anything else stays exactly where it is, in order, and is
+reported rather than skipped. Signing out and into a different account no longer
+replays the first account's writes — which would either write to the wrong
+account or park with a permissions error that looks like data loss.
+
+Entries queued before this existed carry no owner and are treated as the current
+user's, which is what they were.
+
 | Slice | Description | Status |
 |---|---|---|
-| 2a | Sign-in itself is **done** — email + 6-digit code, built in 1f (a link opens in Safari, not the installed app). Remaining: signed-out empty state, session expiry and refresh failure, and a sign-out control | todo |
+| 2a | Sign-in, session persistence, expiry and refresh failure, a signed-out state that hides nothing, and a sign-out control | **green** |
 | 2b | Roles: league admin, team manager, team scorer, viewer | todo |
+| — | Not done in 2a: nothing surfaces *parked* writes in the UI yet, and there is no "retry these" control. That is 6b | todo |
 | 2c | Invite flow: manager generates a link/code, invitee lands in the right team+role | todo |
 
 ## Phase 3 — Live shared scoring
@@ -601,6 +644,23 @@ queue drains.
 The cost is that an absence in the account can no longer express a deletion. No
 feature deletes games in the account today, so nothing conflicts; when one
 exists it will need an explicit tombstone.
+
+### D11 — "Cannot refresh right now" is not "signed out"
+
+A failed token refresh has two completely different causes and they had one
+outcome. Offline, the stored session survives untouched; revoked, the server
+wipes it. Both were confirmed against a real auth server, and the difference is
+now what the app keys off — with an unrecognised error leaning towards keeping
+the person in, because the cost of guessing wrong that way is a stale banner and
+the cost of guessing wrong the other way is a season you cannot reach.
+
+Sign-out never deletes local data. It keeps the season and the write queue, and
+clears only the synced-games marker, which is a claim about an account we no
+longer know the identity of.
+
+Unsent writes warn rather than block. Refusing to sign out would trap someone
+with no signal into staying signed in, which is worse than a warning they can
+read and act on.
 
 ### D3 — League visibility is a column, not an assumption
 

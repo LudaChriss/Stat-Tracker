@@ -185,6 +185,7 @@ const clickText = async (text, ms = 8000) => {
   return 'MISS — on screen: ' + JSON.stringify(await buttons());
 };
 
+const bodyText = () => js(`document.body.textContent.replace(/\\s+/g,' ').trim()`);
 const appState = async () => {
   const raw = await get('score-tracker:state');
   try { return JSON.parse(raw).state; } catch { return null; }
@@ -275,6 +276,10 @@ if (!row) {
   console.log('  queue pending: ' + JSON.stringify((q.pending || []).map((e) => e.kind + '/' + e.attempts)));
   console.log('  queue parked : ' + JSON.stringify((q.parked || []).map((e) => e.kind + ': ' + (e.error || ''))));
   console.log('  page said    : ' + (pageLog.join('\n                 ') || 'nothing'));
+  console.log('  keys         : ' + JSON.stringify(await js(`Object.keys(localStorage)`)));
+  console.log('  teamId key   : ' + String(await get('score-tracker:teamId')));
+  console.log('  userId key   : ' + String(await get('score-tracker:userId')));
+  console.log('  on screen    : ' + String(await bodyText()).slice(0, 120));
 }
 ok('finalizing wrote the game to the backend', !!row, 'no row with client_id ' + finalized.id);
 need('a game row to inspect', !!row);

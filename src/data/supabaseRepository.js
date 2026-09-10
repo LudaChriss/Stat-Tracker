@@ -48,7 +48,23 @@ export function mergeHistory(local, remote) {
   const deviceOnly = (local || []).filter((g) => g && !known.has(g.id));
   return deviceOnly.length ? [...fromAccount, ...deviceOnly] : fromAccount;
 }
-const SYNCED_GAMES_KEY = 'score-tracker:syncedGames';
+export const SYNCED_GAMES_KEY = 'score-tracker:syncedGames';
+
+/**
+ * Forget which games this device believes are in "the account".
+ *
+ * Called on sign-out. The marker is a claim about one account, and once signed
+ * out we no longer know which one — leaving it would let it hide games from a
+ * backfill after signing into a different account. Re-sending is idempotent, so
+ * the cost of clearing it is nothing.
+ */
+export function forgetSyncedGames() {
+  try {
+    localStorage.removeItem(SYNCED_GAMES_KEY);
+  } catch {
+    /* storage unavailable: nothing to forget */
+  }
+}
 
 // A per-game marker rather than a timestamp: clocks differ between devices,
 // and "everything after time T" is the wrong question once there is more than
@@ -76,9 +92,10 @@ function markGameSynced(id) {
  * @param {object} client   a supabase-js client
  * @param {object} options
  * @param {() => string|null} options.getTeamId  which team this device scores for
+ * @param {() => string|null} [options.getUserId]  whose account these writes are for
  * @param {object} [options.cache]  a local repository used as the offline mirror
  */
-export function createSupabaseRepository(client, { getTeamId, cache = null, queue = null } = {}) {
+export function createSupabaseRepository(client, { getTeamId, getUserId = null, cache = null, queue = null } = {}) {
   let saveTimer = null;
   let lastError = null;
 
@@ -97,8 +114,11 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
     },
   };
 
+  /** Whose writes these are. Null before a session is known. */
+  const owner = () => (getUserId ? getUserId() : null);
+
   async function flushQueue() {
-    const result = await writes.flush(handlers);
+    const result = await writes.flush(handlers, { owner: owner() });
     lastError = writes.parked().length ? new Error('Some changes could not be saved') : null;
     return result;
   }
@@ -248,12 +268,21 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
     saveGame(record) {
       if (!record || !record.id) return;
       // No coalesceKey: every finalized game must be replayed on its own.
-      writes.enqueue({ kind: 'game', payload: record });
+      writes.enqueue({ kind: 'game', payload: record, owner: owner() });
       flushQueue().catch(() => {});
     },
 
     /** Which games this device has confirmed are in the account. */
     syncedGames: () => readSyncedGames(),
+
+    /** What is still waiting to reach the account, for anyone. */
+    unsent: () => writes.unsent(),
+
+    /** Writes queued for a different account than the one signed in now. */
+    foreignWrites: () => writes.foreign(owner()),
+
+    /** Try to drain the queue now. Used by the sign-out warning. */
+    flushNow: () => flushQueue(),
 
     /**
      * What a bulk send would do, worked out before anything is written.
@@ -375,7 +404,7 @@ export function createSupabaseRepository(client, { getTeamId, cache = null, queu
         // Coalesced per team: a later whole-season snapshot wholly contains an
         // earlier one, so replaying both would be waste, not safety. Event-log
         // appends are never coalesced.
-        writes.enqueue({ kind: 'season', payload: state, coalesceKey: teamId });
+        writes.enqueue({ kind: 'season', payload: state, coalesceKey: teamId, owner: owner() });
         flushQueue().catch(() => {});
       }, SAVE_DEBOUNCE_MS);
     },

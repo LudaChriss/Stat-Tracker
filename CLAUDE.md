@@ -65,6 +65,15 @@ Write the script to a file and run the file.
   `npm test`.
 - Suites that need the database skip cleanly without a local Supabase, so
   `npm test` still passes on a machine with no Docker.
+- Browser harnesses are run by hand, not by `npm test`: `browser-save-game.mjs`,
+  `browser-backfill.mjs`, `browser-session.mjs`. Each needs a dev server on
+  :5173 and Chrome on `--remote-debugging-port=9222`.
+- `session-expiry.mjs` and `browser-session.mjs` need genuinely short-lived
+  tokens: set `jwt_expiry = 8` under `[auth]` in `supabase/config.toml` and
+  restart the stack. **Put it back to 3600 afterwards** — an 8-second token
+  expires mid-migration and makes the other browser harnesses fail for reasons
+  that have nothing to do with the code. Both refuse to run (exit 2) rather
+  than passing quietly when tokens are normal length.
 
 ## Local backend
 

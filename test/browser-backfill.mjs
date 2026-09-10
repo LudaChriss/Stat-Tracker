@@ -186,17 +186,17 @@ await until('a clean boot', async () => (await js(`Object.keys(localStorage).len
 await put('score-tracker:state', JSON.stringify({ version: 3, state: { ...seeded, screen: 'roster' } }));
 await send('Page.reload');
 {
-  // With a backend configured and no session, the app blocks on sign-in — the
-  // season on this device is not reachable at all. That is today's behaviour,
-  // asserted here so that phase 2a changing it is a deliberate, visible change
-  // rather than a silent one.
+  // Since phase 2a, being signed out is a banner over a working app rather
+  // than a wall in front of it.
   const shown = await until('whatever the app shows with no session', async () => {
     const t = await bodyText();
     return t && t.length > 40 ? t : null;
   }, 20000);
-  ok('with no session the app shows the sign-in screen', /Sign in/.test(shown || ''), (shown || '').slice(0, 160));
-  ok('and the local season is not reachable behind it',
-    !/Season data|Export season/.test(shown || ''), (shown || '').slice(0, 160));
+  ok('with no session the app says so', /Not signed in/.test(shown || ''), (shown || '').slice(0, 160));
+  ok('and the local season is reachable anyway',
+    /Season data|Export season/.test(shown || ''), (shown || '').slice(0, 200));
+  ok('without demanding a sign-in first',
+    !/Email me a code|6-digit code/.test(shown || ''), (shown || '').slice(0, 200));
 
   const list = await buttons();
   ok('so the backfill button is not offered either',
@@ -333,6 +333,39 @@ eq('and closes cleanly', await clickText('Close'), 'OK');
 const onDevice = await appState();
 const stillWrong = (onDevice.history || []).find((g) => g.id === 'g-legacy-tie');
 eq('the legacy record was NOT rewritten on the device', stillWrong ? stillWrong.result : null, 'W');
+
+// ---- the sign-out sheet, while genuinely signed in --------------------------
+// Measured here rather than in browser-session.mjs because that harness only
+// runs with a short jwt_expiry, and this UI should be checked on every run.
+{
+  eq('the account row offers a sign out', await clickText('Sign out'), 'OK');
+  const sheet = await until('the sign-out sheet', async () => {
+    const t = await bodyText();
+    return t && /Your season stays on this phone/.test(t) ? t : null;
+  }, 15000);
+  ok('signing out explains what happens to the season', !!sheet, (await bodyText()).slice(0, 200));
+  ok('and names the account', /Signed in as/.test(sheet || ''), (sheet || '').slice(0, 200));
+  ok('with nothing queued, it does not invent a warning',
+    !/have not reached your account/.test(sheet || ''), (sheet || '').slice(0, 300));
+
+  for (const [name, w, h] of [['iPhone SE', 375, 667], ['iPhone 15 Pro Max', 430, 932]]) {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: false });
+    await sleep(400);
+    const m = await js(MEASURE);
+    eq(`${name}: the sign-out sheet does not overflow`, m.overflow <= 0, true);
+    eq(`${name}: nothing clipped`, m.wide, []);
+    eq(`${name}: every control tappable`, m.small, []);
+  }
+  await send('Emulation.setDeviceMetricsOverride', { width: 393, height: 852, deviceScaleFactor: 3, mobile: false });
+
+  eq('and it can be dismissed without signing out', await clickText('Cancel'), 'OK');
+  const stillIn = await until('the roster again', async () => {
+    const t = await bodyText();
+    return t && /Season data/.test(t) && !/Your season stays on this phone/.test(t) ? t : null;
+  }, 15000);
+  ok('cancelling leaves you signed in', !!stillIn, (await bodyText()).slice(0, 160));
+  ok('and the account is still shown', /syncs to this account/.test(stillIn || ''), (stillIn || '').slice(0, 400));
+}
 
 const crashed = await js(`!!document.body.textContent.match(/Something went wrong/)`);
 eq('the app never fell into its error boundary', crashed, false);

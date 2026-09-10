@@ -109,6 +109,7 @@ export default function SignIn({
   onUseCode,
   onUsePassword,
   onBack,
+  onDismiss,
 }) {
   const codeMode = mode === 'code';
   const codeStep = codeMode && step === 'code';
@@ -132,6 +133,25 @@ export default function SignIn({
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: 'var(--hdr-top) 20px 8px' }}>
+        {/* Signing in is optional: the season works without it, so there has to
+            be a way back to it. */}
+        {onDismiss && (
+          <button
+            onClick={onDismiss}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: C.muted,
+              padding: '6px 0',
+              minHeight: 44,
+              fontSize: 14,
+              fontWeight: 700,
+              ...btn,
+            }}
+          >
+            ‹ Keep using this phone only
+          </button>
+        )}
         <div style={{ fontSize: 22, fontWeight: 800 }}>Sign in</div>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 4 }}>
           {codeMode

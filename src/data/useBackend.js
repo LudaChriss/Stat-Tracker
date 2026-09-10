@@ -7,16 +7,40 @@
 // The invariant running through all of it: local data is never deleted and
 // never modified by any of these paths. Adopting the account's season demotes
 // the local copy to a cache; it stays on the device and stays exportable.
+//
+// There are three account states, not two, and the middle one is the point:
+//
+//   ready       signed in, the account is reachable
+//   stale       we hold a session but could not reach the server. NOT signed
+//               out. The season stays on screen, finalising a game still saves
+//               and still queues, and everything syncs when the signal returns.
+//   signed-out  nobody is signed in, or the server rejected the refresh token.
+//               The local season is still fully usable; sign-in is offered,
+//               never imposed.
+//
+// Conflating the middle one with the last is what locked someone out of a
+// season sitting on their own phone.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSupabase, isSupabaseConfigured } from './supabaseClient.js';
 import { createAuth } from './auth.js';
 import { createLocalRepository } from './localRepository.js';
-import { createSupabaseRepository } from './supabaseRepository.js';
+import { createSupabaseRepository, forgetSyncedGames } from './supabaseRepository.js';
 import { decideSync, summarize, verifyMigration } from './seasonSync.js';
 import { buildExport } from '../game/export.js';
 
 const TEAM_KEY = 'score-tracker:teamId';
+// Who was last signed in here. Needed when we hold a session we cannot use:
+// writes still have to be stamped with the account they belong to, and there
+// is no session object to read the id from.
+const USER_KEY = 'score-tracker:userId';
+
+// How long to wait for the auth server before showing the season anyway.
+// supabase-js retries a failed refresh with backoff — measured at 26 seconds
+// on a blocked endpoint — and a splash screen for that long, holding a season
+// that is already on the device, is indistinguishable from the app being
+// broken.
+const AUTH_PATIENCE_MS = 2500;
 
 const readTeamId = () => {
   try {
@@ -28,6 +52,23 @@ const readTeamId = () => {
 const writeTeamId = (id) => {
   try {
     if (id) localStorage.setItem(TEAM_KEY, id);
+  } catch {
+    /* best effort */
+  }
+};
+
+const readUserId = () => {
+  try {
+    return localStorage.getItem(USER_KEY);
+  } catch {
+    return null;
+  }
+};
+const writeUserId = (id) => {
+  try {
+    if (id) localStorage.setItem(USER_KEY, id);
+    // Not data: it only records which account this device last spoke to.
+    else localStorage.removeItem(USER_KEY);
   } catch {
     /* best effort */
   }
@@ -52,12 +93,24 @@ export function useBackend() {
     choice: null,
   }));
 
+  // Actions are called from event handlers long after they were defined, so
+  // they read the live state through a ref rather than a captured copy.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const teamIdRef = useRef(null);
+  // Whose writes the queue is stamping. Kept in a ref so the repository reads
+  // the current value rather than one captured when it was built.
+  const userIdRef = useRef(null);
 
   const makeRemote = useCallback(
     (teamId) => {
       teamIdRef.current = teamId;
-      return createSupabaseRepository(client, { getTeamId: () => teamIdRef.current, cache: local });
+      return createSupabaseRepository(client, {
+        getTeamId: () => teamIdRef.current,
+        getUserId: () => userIdRef.current,
+        cache: local,
+      });
     },
     [client, local],
   );
@@ -71,13 +124,43 @@ export function useBackend() {
     return null;
   }, [client]);
 
+  /**
+   * We hold a session but cannot reach the account.
+   *
+   * The repository stays REMOTE on purpose. The local adapter's saveGame is a
+   * no-op, so swapping to it would mean a game finalised here never reaches the
+   * account at all. The remote adapter already falls back to the local mirror
+   * when a load fails and queues every write, which is exactly the behaviour
+   * wanted: nothing lost, everything sent when the signal returns.
+   */
+  const enterStale = useCallback(() => {
+    const teamId = teamIdRef.current || readTeamId();
+    teamIdRef.current = teamId;
+    // There is no session to read an id from, but writes made now still belong
+    // to the account whose session is sitting unusable on this device.
+    userIdRef.current = userIdRef.current || readUserId();
+    setState((s) => ({
+      ...s,
+      status: 'stale',
+      repository: teamId ? makeRemote(teamId) : local,
+      teamId,
+      error: null,
+    }));
+  }, [local, makeRemote]);
+
   /** Work out what to do, and do it when it is unambiguous. */
   const reconcile = useCallback(
     async (session) => {
       if (!session) {
+        // Local data is never hidden behind this: App renders the season and
+        // offers sign-in rather than demanding it.
+        userIdRef.current = null;
         setState((s) => ({ ...s, status: 'signed-out', session: null, repository: local }));
         return;
       }
+
+      userIdRef.current = (session.user && session.user.id) || null;
+      writeUserId(userIdRef.current);
 
       setState((s) => ({ ...s, status: 'preparing', session, error: null }));
 
@@ -179,19 +262,63 @@ export function useBackend() {
     if (!isSupabaseConfigured) return undefined;
     let cancelled = false;
 
-    auth.getSession().then((session) => {
-      if (!cancelled) reconcile(session);
+    // Show the season rather than a splash if the auth server is slow to
+    // answer. A late answer still upgrades this: a session resolves into a
+    // normal sign-in, and a genuine rejection into signed-out.
+    let settled = false;
+    const patience = setTimeout(() => {
+      if (!cancelled && !settled && auth.hasStoredSession()) enterStale();
+    }, AUTH_PATIENCE_MS);
+
+    auth.getSessionDetailed().then(({ session, reason }) => {
+      settled = true;
+      clearTimeout(patience);
+      if (cancelled) return;
+      if (session) {
+        reconcile(session);
+      } else if (reason === 'offline') {
+        // A session is on this device; the server just is not answering.
+        enterStale();
+      } else {
+        reconcile(null);
+      }
     });
-    const stop = auth.onChange((session) => {
-      if (!cancelled) reconcile(session);
+
+    const stop = auth.onChange((session, event) => {
+      if (cancelled) return;
+      if (session) {
+        // A refreshed token for the person already signed in is not news. It
+        // used to re-run the whole reconciliation, which drops the app back to
+        // a splash and unmounts whatever was open — every hour, mid-game if the
+        // timing landed there. Keep the fresher session and carry on.
+        const sameUser = !!userIdRef.current && session.user && session.user.id === userIdRef.current;
+        if (sameUser && stateRef.current.status === 'ready') {
+          setState((s) => ({ ...s, session }));
+          return;
+        }
+        // Anything else — first sign-in, a different account, or coming back
+        // from stale — genuinely needs working out again.
+        reconcile(session);
+        return;
+      }
+      // No session in the event. A deliberate sign-out is exactly that; a
+      // failed refresh while we still hold a stored session is not.
+      if (event === 'SIGNED_OUT' && !auth.hasStoredSession()) {
+        reconcile(null);
+      } else if (auth.hasStoredSession()) {
+        enterStale();
+      } else {
+        reconcile(null);
+      }
     });
 
     return () => {
       cancelled = true;
+      clearTimeout(patience);
       stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth]);
+  }, [auth, enterStale]);
 
   const actions = {
     auth,
@@ -234,12 +361,42 @@ export function useBackend() {
 
     cancelChoice: () => setState((s) => ({ ...s, status: 'ready', repository: local, choice: null })),
 
+    /** What is still waiting to reach the account, so sign-out can warn. */
+    unsentWrites: () => {
+      const repo = stateRef.current.repository;
+      return repo && repo.unsent ? repo.unsent() : { pending: 0, parked: 0 };
+    },
+
+    /** One more attempt to drain the queue, offered before signing out. */
+    syncNow: async () => {
+      const repo = stateRef.current.repository;
+      if (repo && repo.flushNow) await repo.flushNow();
+      return stateRef.current.repository && stateRef.current.repository.unsent
+        ? stateRef.current.repository.unsent()
+        : { pending: 0, parked: 0 };
+    },
+
     dismissError: () => setState((s) => ({ ...s, error: null })),
 
+    /**
+     * Sign out without losing anything.
+     *
+     * The season stays in localStorage, and so does the write queue: unsent
+     * writes are stamped with the account they belong to and wait for it. The
+     * caller is expected to have warned about them first — this does not
+     * refuse, because refusing would trap someone with no signal into staying
+     * signed in.
+     *
+     * The synced-games marker IS cleared, because it is a claim about "the
+     * account" and we no longer know which one that is.
+     */
     signOut: async () => {
       await auth.signOut();
       teamIdRef.current = null;
-      setState((s) => ({ ...s, status: 'signed-out', session: null, repository: local }));
+      userIdRef.current = null;
+      writeUserId(null);
+      forgetSyncedGames();
+      setState((s) => ({ ...s, status: 'signed-out', session: null, teamId: null, repository: local }));
     },
   };
 

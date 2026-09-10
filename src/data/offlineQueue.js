@@ -28,6 +28,15 @@
 //     are. Permanent failures move to `parked` with the error attached and
 //     are never deleted; they wait for an explicit retryParked().
 //
+//  4. ADDRESSED TO AN ACCOUNT. Every entry records the user it was queued for.
+//     A write is not a free-floating intention: it names a team inside one
+//     account. Replaying it as somebody else would either write to the wrong
+//     account or be refused by row-level security and park with a permissions
+//     error that looks like data loss. So flush only ever applies entries
+//     belonging to the current user; anything else is left untouched and can be
+//     reported. Entries queued before this existed carry no owner and are
+//     treated as the current user's, which is what they were.
+//
 // Coalescing is for whole-snapshot writes (e.g. "the season, as of now"),
 // where only the latest value matters and re-sending every intermediate
 // version would be wasted work. An entry opts in by carrying a
@@ -138,6 +147,9 @@ export function createOfflineQueue({
       kind: op && op.kind,
       payload: op ? op.payload : undefined,
       coalesceKey,
+      // Which account this write is for. Null means "whoever is signed in",
+      // which is how entries behaved before this was recorded.
+      owner: op && op.owner != null ? op.owner : null,
       status: 'pending',
       attempts: 0,
       lastError: null,
@@ -148,8 +160,12 @@ export function createOfflineQueue({
     let pending = state.pending;
     if (coalesceKey != null) {
       // Only a PENDING entry of the same kind+key is superseded — a parked
-      // one is a recorded failure, not a stale draft, and stays put.
-      pending = pending.filter((e) => !(e.kind === entry.kind && e.coalesceKey === coalesceKey));
+      // one is a recorded failure, not a stale draft, and stays put. The owner
+      // has to match too: one account's snapshot must never stand in for
+      // another's, even for the same team id.
+      pending = pending.filter(
+        (e) => !(e.kind === entry.kind && e.coalesceKey === coalesceKey && sameOwner(e.owner, entry.owner)),
+      );
     }
     pending = [...pending, entry];
 
@@ -194,9 +210,23 @@ export function createOfflineQueue({
    * first one that does not cleanly succeed. Never throws: a handler
    * rejection is caught and classified, not propagated.
    */
-  async function flush(handlers = {}) {
+  /** An entry with no owner belongs to whoever is signed in now. */
+  function sameOwner(entryOwner, owner) {
+    return entryOwner == null || owner == null || entryOwner === owner;
+  }
+
+  /**
+   * @param {object} handlers   keyed by entry kind
+   * @param {object} [options]
+   * @param {string} [options.owner]  only apply entries queued for this user
+   */
+  async function flush(handlers = {}, { owner = null } = {}) {
     const state = read();
-    const ordered = state.pending.slice().sort((a, b) => a.seq - b.seq);
+    const all = state.pending.slice().sort((a, b) => a.seq - b.seq);
+    // Another account's writes are not skipped in the sense of being lost —
+    // they stay exactly where they are, in order, waiting for that account.
+    const ordered = all.filter((e) => sameOwner(e.owner, owner));
+    const held = all.filter((e) => !sameOwner(e.owner, owner));
     const parkedList = state.parked.slice();
     const stillPending = [];
     const applied = [];
@@ -242,10 +272,21 @@ export function createOfflineQueue({
       }
     }
 
-    write({ seq: state.seq, pending: stillPending, parked: parkedList });
+    write({ seq: state.seq, pending: [...stillPending, ...held].sort((a, b) => a.seq - b.seq), parked: parkedList });
 
-    return { applied, failed, remaining: stillPending.length };
+    return { applied, failed, remaining: stillPending.length, heldForOtherAccounts: held.length };
   }
 
-  return { enqueue, list, parked, flush, retryParked, size, clear };
+  /** Entries queued for a different account than the one given. */
+  function foreign(owner) {
+    return read().pending.filter((e) => !sameOwner(e.owner, owner));
+  }
+
+  /** Everything still waiting to go, for anyone. */
+  function unsent() {
+    const state = read();
+    return { pending: state.pending.length, parked: state.parked.length };
+  }
+
+  return { enqueue, list, parked, flush, retryParked, size, clear, foreign, unsent };
 }
