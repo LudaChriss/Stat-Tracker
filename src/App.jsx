@@ -21,7 +21,8 @@ import { NameSheet } from './components/ResetSheets.jsx';
 import SignIn from './screens/SignIn.jsx';
 import SyncPrompt from './components/SyncPrompt.jsx';
 import { useBackend } from './data/useBackend.js';
-import AccountBar from './components/AccountBar.jsx';
+import AccountBar, { ParkedBar } from './components/AccountBar.jsx';
+import ParkedWrites from './components/ParkedWrites.jsx';
 import SignOutSheet from './components/SignOutSheet.jsx';
 import { useSignInForm } from './data/useSignInForm.js';
 
@@ -70,7 +71,7 @@ function useFullBleed() {
   return installed || iosStandalone || narrow;
 }
 
-function GameApp({ repository, backend, onSignIn, onSignOut }) {
+function GameApp({ repository, backend, onSignIn, onSignOut, parked, onOpenParked }) {
   const { state, actions } = useGame(repository);
   const v = useMemo(() => deriveView(state, actions), [state, actions]);
 
@@ -93,6 +94,7 @@ function GameApp({ repository, backend, onSignIn, onSignOut }) {
         paddingBottom: 'var(--safe-bottom)',
       }}
     >
+      <ParkedBar count={parked.length} onOpen={onOpenParked} />
       <AccountBar status={backend.status} onSignIn={onSignIn} />
       <Screen
         v={{ ...v, account: { status: backend.status, email: (backend.session && backend.session.user && backend.session.user.email) || null } }}
@@ -140,10 +142,39 @@ export default function App() {
   const [showSignIn, setShowSignIn] = useState(false);
   const [signOutSheet, setSignOutSheet] = useState(null);
   const [signingOut, setSigningOut] = useState(false);
+  // Writes that failed in a way retrying cannot fix. Read from the queue and
+  // kept fresh by subscribing to it, so one appearing mid-game is visible
+  // immediately rather than at the next reload.
+  const [parked, setParked] = useState([]);
+  const [showParked, setShowParked] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  const repository = backend.repository;
+  useEffect(() => {
+    if (!repository || !repository.parkedWrites) {
+      setParked([]);
+      return undefined;
+    }
+    const refresh = () => setParked(repository.parkedWrites());
+    refresh();
+    return repository.subscribe ? repository.subscribe(refresh) : undefined;
+  }, [repository]);
 
   if (backend.status === 'loading' || backend.status === 'preparing') {
     return <Splash label={backend.status === 'preparing' ? 'Checking your season…' : 'Loading…'} />;
   }
+
+  const retry = async (id) => {
+    setRetrying(true);
+    try {
+      if (repository && repository.retryParked) await repository.retryParked(id);
+      const left = repository && repository.parkedWrites ? repository.parkedWrites() : [];
+      setParked(left);
+      if (!left.length) setShowParked(false);
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   if (showSignIn && backend.status === 'signed-out') {
     return <SignIn {...signIn} onDismiss={() => setShowSignIn(false)} />;
@@ -159,7 +190,18 @@ export default function App() {
         backend={backend}
         onSignIn={() => setShowSignIn(true)}
         onSignOut={() => setSignOutSheet(backend.actions.unsentWrites())}
+        parked={parked}
+        onOpenParked={() => setShowParked(true)}
       />
+      {showParked && (
+        <ParkedWrites
+          entries={parked}
+          busy={retrying}
+          onRetry={retry}
+          onRetryAll={() => retry(undefined)}
+          onClose={() => setShowParked(false)}
+        />
+      )}
       {signOutSheet && (
         <SignOutSheet
           email={(backend.session && backend.session.user && backend.session.user.email) || null}

@@ -25,6 +25,55 @@ const WORDING = {
   },
 };
 
+/**
+ * A write that cannot be sent is not a footnote. This sits above everything,
+ * in the alarm colour, and does not go away until the write does — there is no
+ * dismiss, because dismissing it is exactly how someone ends up believing a
+ * game reached their account when it did not.
+ */
+export function ParkedBar({ count, onOpen }) {
+  if (!count) return null;
+  return (
+    <div
+      style={{
+        background: '#FFECE6',
+        borderBottom: `1px solid ${C.coral}`,
+        padding: '8px 14px',
+        paddingTop: 'max(8px, var(--safe-top, 8px))',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink }}>
+          {count === 1 ? "1 change didn't save" : `${count} changes didn't save`}
+        </div>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, lineHeight: 1.35 }}>
+          Still on this phone. They have not reached your account.
+        </div>
+      </div>
+      <button
+        onClick={onOpen}
+        style={{
+          flexShrink: 0,
+          background: C.coral,
+          border: 'none',
+          color: '#fff',
+          borderRadius: 99,
+          padding: '0 14px',
+          minHeight: 40,
+          fontSize: 13,
+          fontWeight: 800,
+          ...btn,
+        }}
+      >
+        Review
+      </button>
+    </div>
+  );
+}
+
 export default function AccountBar({ status, onSignIn }) {
   const wording = WORDING[status];
   if (!wording) return null;

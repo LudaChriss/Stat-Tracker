@@ -5,7 +5,7 @@ finalised on the phone is now written to the account.**
 
 Plus the backfill for games finalised before that slice, now built.
 
-**747 assertions, 25 suites, build clean, viewport audit clean** (56
+**776 assertions, 26 suites, build clean, viewport audit clean** (56
 screen×viewport combinations, no overflow, no tap target under 44px).
 Nothing is blocked. Do not push before reading §5.
 
@@ -449,7 +449,7 @@ user's, which is what they were.
 |---|---|---|
 | 2a | Sign-in, session persistence, expiry and refresh failure, a signed-out state that hides nothing, and a sign-out control | **green** |
 | 2b | Roles: league admin, team manager, team scorer, viewer | todo |
-| — | Not done in 2a: nothing surfaces *parked* writes in the UI yet, and there is no "retry these" control. That is 6b | todo |
+| — | Surfacing parked writes was pulled forward into 6b and is done | **green** |
 | 2c | Invite flow: manager generates a link/code, invitee lands in the right team+role | todo |
 
 ## Phase 3 — Live shared scoring
@@ -506,10 +506,36 @@ lost or reinstalled phone, and it needs none of the machinery below.
 
 ## Phase 6 — Hardening
 
+### 6b, UI half — a write that cannot be sent says so
+
+A parked write is one the server refused in a way retrying cannot fix. It is
+now impossible to miss and impossible to lose:
+
+- **A bar at the top of every screen** whenever anything is parked, in the alarm
+  colour, with no dismiss. Dismissing it is precisely how someone ends up
+  believing a game reached their account when it did not.
+- **A screen listing each one**: whether it was a game or the team and roster,
+  which game, when it happened, how many tries, and **the database's own words**
+  rather than a paraphrase — the wording is what makes the problem fixable.
+- **Retry per entry and for all of them.** A revived entry keeps its original
+  sequence number and goes back to where it was in the queue, never to the end.
+  A write made earlier still reaches the server first.
+- **No discard, deliberately.** There is no dismiss, delete or clear anywhere,
+  and a test walks the source to keep it that way. The only way out of this list
+  is succeeding.
+
+**Found while building it, and much bigger than the UI:** every deliberate
+refusal these functions raise — no box-score lines, a result contradicting the
+score, refusing to empty a roster, "not allowed to record games for this team" —
+came back as Postgres `P0001` with **no HTTP status at all**, and the queue
+classified all of them as a network blip. They were retried forever and never
+surfaced. The entire "refuse rather than accept" design was invisible to the
+queue. `P0001` is now permanent, along with Postgres classes 22, 23 and 42.
+
 | Slice | Description | Status |
 |---|---|---|
 | 6a | Full regression across all phases on iPhone viewports | todo |
-| 6b | Offline behaviour | **partial**. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Extended since: a game finalised with the network cut is queued, not lost, and is delivered on reconnect — verified in a browser. Remaining: offline *mid-game* (that is the event log, phase 3), surfacing parked writes in the UI, and the recovery flow for them |
+| 6b | Offline behaviour | **partial**. The UI half is done: a parked write is surfaced, listed with its reason, and retryable — see below. Done in 1f: durable queue surviving reload, strictly ordered replay, transient vs permanent classification, parked writes never dropped, replay on reconnect — verified in a browser for **season** writes. Extended since: a game finalised with the network cut is queued, not lost, and is delivered on reconnect — verified in a browser. Remaining: offline *mid-game* (that is the event log, phase 3) |
 | 6c | Error boundaries, empty states, loading states everywhere data is fetched | todo |
 | 6d | Export/import against the backend | **partial**. Done in 1f: importing an exported season into the backend, verified against the real database as a real user, with rollback when it fails verification. Done in the pulled-forward phase 3 slice: a game finalised while signed in is written to the account and verified on read-back, and a manual backfill sends games finalised before it. Remaining: repairing legacy records that cannot be sent (§7) |
 
@@ -661,6 +687,21 @@ longer know the identity of.
 Unsent writes warn rather than block. Refusing to sign out would trap someone
 with no signal into staying signed in, which is worse than a warning they can
 read and act on.
+
+### D12 — A parked write can only leave by succeeding
+
+There is no discard. Not hidden, not behind a confirmation — absent, with a test
+that walks the source to keep it absent.
+
+The reasoning: a parked write means the device believes something happened that
+the account does not know about. Removing it from the list does not resolve that
+disagreement, it just stops anyone being told about it, which is the failure the
+queue exists to prevent wearing a tidier face. Retrying is the only action, and
+the list empties on its own when a write goes through.
+
+Retrying preserves order. A revived entry keeps its original sequence number, so
+it returns to its place in the queue rather than jumping to the end — the strict
+ordering promise holds across a failure and a retry, not just in the happy path.
 
 ### D3 — League visibility is a column, not an assumption
 

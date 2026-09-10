@@ -95,6 +95,31 @@ function markGameSynced(id) {
  * @param {() => string|null} [options.getUserId]  whose account these writes are for
  * @param {object} [options.cache]  a local repository used as the offline mirror
  */
+/**
+ * What a queued write actually was, in terms someone would recognise on a
+ * screen: which game, or which season snapshot. "game" alone is not enough to
+ * decide whether it matters.
+ */
+function describe(entry) {
+  const p = entry && entry.payload;
+  if (!p) return entry && entry.kind === 'season' ? 'Team and roster' : 'A write';
+
+  if (entry.kind === 'game') {
+    const when = p.label || p.date || '';
+    const who = p.opponent ? `vs ${p.opponent}` : 'a game';
+    const score = p.score ? `${p.score.us}\u2013${p.score.them}` : '';
+    return [when, who, score].filter(Boolean).join(' · ');
+  }
+
+  if (entry.kind === 'season') {
+    const name = (p.myTeam && p.myTeam.name) || 'Your team';
+    const players = (p.roster || []).length;
+    return `${name} · ${players} ${players === 1 ? 'player' : 'players'}`;
+  }
+
+  return entry.kind;
+}
+
 export function createSupabaseRepository(client, { getTeamId, getUserId = null, cache = null, queue = null } = {}) {
   let saveTimer = null;
   let lastError = null;
@@ -278,6 +303,31 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
     /** What is still waiting to reach the account, for anyone. */
     unsent: () => writes.unsent(),
 
+    /**
+     * Writes that failed in a way retrying cannot fix, with enough to say what
+     * each one was and why it stopped. Never emptied except by succeeding.
+     */
+    parkedWrites: () =>
+      writes.parked().map((e) => ({
+        id: e.id,
+        kind: e.kind,
+        // What it was, in the words the person would recognise.
+        title: describe(e),
+        at: e.updatedAt || e.createdAt || null,
+        attempts: e.attempts || 0,
+        error: (e.error && e.error.message) || (e.lastError && e.lastError.message) || 'Unknown error',
+      })),
+
+    /** Put a parked write back in line — in its original place. */
+    retryParked: async (id) => {
+      writes.retryParked(id);
+      await flushQueue();
+      return writes.parked().length;
+    },
+
+    /** Tell me when anything in the queue changes. */
+    subscribe: (fn) => writes.subscribe(fn),
+
     /** Writes queued for a different account than the one signed in now. */
     foreignWrites: () => writes.foreign(owner()),
 
@@ -412,13 +462,8 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
     /** Push anything queued while offline. Safe to call at any time. */
     flush: flushQueue,
 
-    /** Writes that failed permanently and are waiting to be dealt with. */
+    /** How many writes are still in the queue at all. */
     pendingWrites: () => writes.size(),
-    parkedWrites: () => writes.parked(),
-    retryParked: () => {
-      writes.retryParked();
-      return flushQueue();
-    },
 
     async getPreserved() {
       return cache ? cache.getPreserved() : null;

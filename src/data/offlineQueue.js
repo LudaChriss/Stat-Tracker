@@ -112,7 +112,21 @@ export function classifyError(err) {
   // Postgres / PostgREST (Supabase) style codes: class 23 is integrity
   // constraint violation, 42501 is insufficient_privilege.
   const code = err.code != null ? String(err.code) : '';
-  if (code.startsWith('23') || code === '42501' || code === 'PGRST301') return 'permanent';
+
+  // P0001 is `raise exception` — a deliberate refusal written into save_game
+  // and save_season ("no box-score lines", "result disagrees with the score",
+  // "refusing to remove all N players", "not allowed to record games for this
+  // team"). Sending the identical payload again cannot change the answer, so
+  // retrying forever is exactly wrong: it never surfaces and never resolves.
+  //
+  // This mattered more than it looks. Every guard those functions raise came
+  // back with no HTTP status at all, so all of them were being treated as a
+  // network blip and retried in a loop the person could not see.
+  if (code === 'P0001') return 'permanent';
+
+  // Postgres error classes that a retry cannot help either: 22 is a data
+  // exception, 23 an integrity violation, 42 a syntax or access-rule problem.
+  if (/^(22|23|42)/.test(code) || code === 'PGRST301') return 'permanent';
 
   const message = String(err.message || err || '');
   if (/permission|forbidden|denied|constraint|duplicate|unique/i.test(message)) return 'permanent';
@@ -133,9 +147,21 @@ export function createOfflineQueue({
   classifyError: classifyOverride,
 } = {}) {
   const classify = classifyOverride || classifyError;
+  const listeners = new Set();
 
   const read = () => safeReadState(storageKey);
-  const write = (state) => safeWriteState(storageKey, state);
+  const write = (state) => {
+    safeWriteState(storageKey, state);
+    // A parked write has to be visible without the UI polling for it. A
+    // listener that throws is its own problem and must not corrupt the queue.
+    listeners.forEach((fn) => {
+      try {
+        fn(state);
+      } catch {
+        /* a broken listener does not break the queue */
+      }
+    });
+  };
 
   function enqueue(op) {
     const state = read();
@@ -189,10 +215,27 @@ export function createOfflineQueue({
     write(EMPTY_STATE());
   }
 
-  function retryParked() {
+  /**
+   * Move parked entries back into the pending list so a flush will try them
+   * again. With no argument, all of them; with an id, just that one.
+   *
+   * Their original `seq` is kept and the list is re-sorted by it, so a revived
+   * entry goes back to where it always was rather than to the end. Reordering
+   * here would break the promise the whole queue rests on: a write that was
+   * made first reaches the server first.
+   *
+   * There is deliberately no way to discard a parked entry. If something cannot
+   * be sent, the answer is to know about it, not to make it disappear.
+   */
+  function retryParked(id) {
     const state = read();
     if (!state.parked.length) return [];
-    const revived = state.parked.map((e) => ({
+
+    const chosen = id == null ? state.parked : state.parked.filter((e) => e.id === id);
+    if (!chosen.length) return [];
+    const chosenIds = new Set(chosen.map((e) => e.id));
+
+    const revived = chosen.map((e) => ({
       ...e,
       status: 'pending',
       attempts: 0,
@@ -200,8 +243,13 @@ export function createOfflineQueue({
       error: undefined,
       updatedAt: now(),
     }));
+
     const pending = [...state.pending, ...revived].sort((a, b) => a.seq - b.seq);
-    write({ seq: state.seq, pending, parked: [] });
+    write({
+      seq: state.seq,
+      pending,
+      parked: state.parked.filter((e) => !chosenIds.has(e.id)),
+    });
     return revived;
   }
 
@@ -277,6 +325,13 @@ export function createOfflineQueue({
     return { applied, failed, remaining: stillPending.length, heldForOtherAccounts: held.length };
   }
 
+  /** Called after any change, so the UI can show a parked write without polling. */
+  function subscribe(listener) {
+    if (typeof listener !== 'function') return () => {};
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
   /** Entries queued for a different account than the one given. */
   function foreign(owner) {
     return read().pending.filter((e) => !sameOwner(e.owner, owner));
@@ -288,5 +343,5 @@ export function createOfflineQueue({
     return { pending: state.pending.length, parked: state.parked.length };
   }
 
-  return { enqueue, list, parked, flush, retryParked, size, clear, foreign, unsent };
+  return { enqueue, list, parked, flush, retryParked, size, clear, foreign, unsent, subscribe };
 }
