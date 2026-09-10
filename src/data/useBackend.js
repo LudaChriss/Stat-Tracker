@@ -26,7 +26,8 @@ import { getSupabase, isSupabaseConfigured } from './supabaseClient.js';
 import { createAuth } from './auth.js';
 import { createLocalRepository } from './localRepository.js';
 import { createSupabaseRepository, forgetSyncedGames } from './supabaseRepository.js';
-import { decideSync, summarize, verifyMigration } from './seasonSync.js';
+import { decideSync, isEmptySeason, summarize, verifyMigration } from './seasonSync.js';
+import { createInvites } from './invites.js';
 import { buildExport } from '../game/export.js';
 
 const TEAM_KEY = 'score-tracker:teamId';
@@ -80,6 +81,9 @@ export function useBackend() {
   if (!authRef.current) authRef.current = createAuth(client);
   const auth = authRef.current;
 
+  const invitesRef = useRef(null);
+  if (!invitesRef.current) invitesRef.current = createInvites(client);
+
   const localRef = useRef(null);
   if (!localRef.current) localRef.current = createLocalRepository();
   const local = localRef.current;
@@ -91,6 +95,10 @@ export function useBackend() {
     teamId: null,
     error: null,
     choice: null,
+    // Which role this account holds on the team it is looking at. Null until
+    // resolved, and never assumed: the UI offers to invite only when the
+    // database has said this user manages the team.
+    role: null,
   }));
 
   // Actions are called from event handlers long after they were defined, so
@@ -113,6 +121,27 @@ export function useBackend() {
       });
     },
     [client, local],
+  );
+
+  /**
+   * Which role do we hold on this team?
+   *
+   * Read rather than inferred. A manager and a scorer see the same season, and
+   * guessing wrong in the generous direction would show someone an invite
+   * button the database will refuse.
+   */
+  const resolveRole = useCallback(
+    async (teamId) => {
+      if (!teamId) return null;
+      const { data, error } = await client
+        .from('memberships')
+        .select('role')
+        .eq('team_id', teamId)
+        .maybeSingle();
+      if (error || !data) return null;
+      return data.role;
+    },
+    [client],
   );
 
   /** Which team does this account score for? */
@@ -174,11 +203,13 @@ export function useBackend() {
 
         if (decision.action === 'adopt-backend') {
           if (teamId) writeTeamId(teamId);
+          const role = await resolveRole(teamId);
           setState((s) => ({
             ...s,
             status: 'ready',
             session,
             teamId,
+            role,
             repository: teamId ? remoteRepo : local,
             error: null,
           }));
@@ -212,7 +243,7 @@ export function useBackend() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [local, makeRemote, resolvePrimaryTeam],
+    [local, makeRemote, resolvePrimaryTeam, resolveRole],
   );
 
   /** Send this device's season up, and only trust it once it reads back right. */
@@ -252,9 +283,10 @@ export function useBackend() {
       }
 
       writeTeamId(teamId);
-      setState((s) => ({ ...s, status: 'ready', teamId, repository: remoteRepo, error: null }));
+      const role = await resolveRole(teamId);
+      setState((s) => ({ ...s, status: 'ready', teamId, role, repository: remoteRepo, error: null }));
     },
-    [client, local, makeRemote],
+    [client, local, makeRemote, resolveRole],
   );
 
   // Follow the session for the life of the app.
@@ -361,6 +393,58 @@ export function useBackend() {
 
     cancelChoice: () => setState((s) => ({ ...s, status: 'ready', repository: local, choice: null })),
 
+    invites: invitesRef.current,
+
+    /**
+     * Redeem an invite.
+     *
+     * The membership is the easy half. The judgement is what to do with the
+     * season already on this device, and the rule is the one that governs
+     * everything else here: it is never touched without being asked.
+     *
+     *   nothing local yet  -> adopt the team that was joined. There is nothing
+     *                         to lose, and landing somewhere is the whole point
+     *                         of accepting an invite.
+     *   a season is here   -> the membership is granted and NOTHING ELSE
+     *                         HAPPENS. The device keeps showing what it was
+     *                         showing. Switching between two seasons is phase
+     *                         4; doing it implicitly here would let an invite
+     *                         code replace what is on someone's screen.
+     */
+    acceptInvite: async (code) => {
+      const invites = invitesRef.current;
+      const { membership, error } = await invites.accept(code);
+      if (error) return { error };
+
+      const teamId = membership && membership.team_id;
+      const role = membership && membership.role;
+
+      // What the code said it was for, for the confirmation wording.
+      const { invite } = await invites.peek(code);
+      const teamName = (invite && invite.team_name) || null;
+
+      const localSeason = local.loadSync();
+      const nothingToLose = isEmptySeason(localSeason);
+
+      if (!nothingToLose || !teamId) {
+        // Deliberately inert. Not even the primary team is repointed: that is
+        // what decides which season loads on the next launch.
+        return { role, teamName, switched: false };
+      }
+
+      const claimed = await client.rpc('set_primary_team', { team_id: teamId });
+      if (claimed.error) {
+        // The membership stands; only the landing failed. Say so rather than
+        // pretending, and leave the device where it was.
+        return { role, teamName, switched: false, error: null };
+      }
+
+      writeTeamId(teamId);
+      const remoteRepo = makeRemote(teamId);
+      setState((s) => ({ ...s, status: 'ready', teamId, role, repository: remoteRepo, error: null }));
+      return { role, teamName, switched: true };
+    },
+
     /** What is still waiting to reach the account, so sign-out can warn. */
     unsentWrites: () => {
       const repo = stateRef.current.repository;
@@ -400,5 +484,12 @@ export function useBackend() {
     },
   };
 
-  return { ...state, actions, localRepository: local };
+  return {
+    ...state,
+    actions,
+    localRepository: local,
+    // Whether this device already has something to lose, which is what decides
+    // if accepting an invite may land you anywhere.
+    hasLocalSeason: !isEmptySeason(local.loadSync()),
+  };
 }

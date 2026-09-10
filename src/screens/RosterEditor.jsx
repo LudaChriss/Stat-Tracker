@@ -217,6 +217,7 @@ export default function RosterEditor({ v, actions }) {
                   {v.account.email || 'Not signed in'}
                 </div>
                 <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, marginTop: 2 }}>
+                  {v.account.roleLabel ? `${v.account.roleLabel} · ` : ''}
                   {v.account.status === 'stale'
                     ? 'Signed in, but the account cannot be reached right now.'
                     : v.account.status === 'signed-out'
@@ -234,7 +235,27 @@ export default function RosterEditor({ v, actions }) {
                 </button>
               )}
             </div>
+
+            {v.account.status !== 'signed-out' && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                {v.account.canInvite && (
+                  <button onClick={actions.openInvite} style={{ ...accountBtn, flex: 1 }}>
+                    Invite someone
+                  </button>
+                )}
+                <button onClick={actions.openJoin} style={{ ...accountBtn, flex: 1 }}>
+                  Join a team
+                </button>
+              </div>
+            )}
           </Card>
+          {v.account.status !== 'signed-out' && (
+            <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+              {v.account.canInvite
+                ? 'Invite a scorer or a viewer to this team, or join someone else\'s with a code.'
+                : 'Have a code from a team manager? Join their team with it.'}
+            </div>
+          )}
         </div>
       )}
 

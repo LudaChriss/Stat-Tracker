@@ -23,6 +23,9 @@ import SyncPrompt from './components/SyncPrompt.jsx';
 import { useBackend } from './data/useBackend.js';
 import AccountBar, { ParkedBar } from './components/AccountBar.jsx';
 import ParkedWrites from './components/ParkedWrites.jsx';
+import InviteSheet from './components/InviteSheet.jsx';
+import { ROLE_LABEL } from './data/invites.js';
+import JoinTeamSheet from './components/JoinTeamSheet.jsx';
 import SignOutSheet from './components/SignOutSheet.jsx';
 import { useSignInForm } from './data/useSignInForm.js';
 
@@ -71,7 +74,7 @@ function useFullBleed() {
   return installed || iosStandalone || narrow;
 }
 
-function GameApp({ repository, backend, onSignIn, onSignOut, parked, onOpenParked }) {
+function GameApp({ repository, backend, onSignIn, onSignOut, parked, onOpenParked, onInvite, onJoin }) {
   const { state, actions } = useGame(repository);
   const v = useMemo(() => deriveView(state, actions), [state, actions]);
 
@@ -97,8 +100,19 @@ function GameApp({ repository, backend, onSignIn, onSignOut, parked, onOpenParke
       <ParkedBar count={parked.length} onOpen={onOpenParked} />
       <AccountBar status={backend.status} onSignIn={onSignIn} />
       <Screen
-        v={{ ...v, account: { status: backend.status, email: (backend.session && backend.session.user && backend.session.user.email) || null } }}
-        actions={{ ...actions, openSignOut: onSignOut, openSignIn: onSignIn }}
+        v={{
+          ...v,
+          account: {
+            status: backend.status,
+            email: (backend.session && backend.session.user && backend.session.user.email) || null,
+            role: backend.role,
+            roleLabel: ROLE_LABEL[backend.role] || null,
+            // Only a manager. The database refuses anyone else, so offering it
+            // more widely would just be a button that fails.
+            canInvite: backend.role === 'team_manager',
+          },
+        }}
+        actions={{ ...actions, openSignOut: onSignOut, openSignIn: onSignIn, openInvite: onInvite, openJoin: onJoin }}
       />
       {v.needsSetup && (
         <NameSheet
@@ -146,6 +160,8 @@ export default function App() {
   // kept fresh by subscribing to it, so one appearing mid-game is visible
   // immediately rather than at the next reload.
   const [parked, setParked] = useState([]);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
   const [showParked, setShowParked] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
@@ -192,7 +208,24 @@ export default function App() {
         onSignOut={() => setSignOutSheet(backend.actions.unsentWrites())}
         parked={parked}
         onOpenParked={() => setShowParked(true)}
+        onInvite={() => setInviteOpen(true)}
+        onJoin={() => setJoinOpen(true)}
       />
+      {inviteOpen && (
+        <InviteSheet
+          teamName={v0TeamName(backend)}
+          onCreate={(role) => backend.actions.invites.create(backend.teamId, role)}
+          onClose={() => setInviteOpen(false)}
+        />
+      )}
+      {joinOpen && (
+        <JoinTeamSheet
+          hasLocalSeason={backend.hasLocalSeason}
+          onPeek={(code) => backend.actions.invites.peek(code)}
+          onAccept={(code) => backend.actions.acceptInvite(code)}
+          onClose={() => setJoinOpen(false)}
+        />
+      )}
       {showParked && (
         <ParkedWrites
           entries={parked}
@@ -235,6 +268,16 @@ export default function App() {
       {backend.error && <BackendNotice message={backend.error} onDismiss={backend.actions.dismissError} />}
     </>
   );
+}
+
+/** The current team's name, for wording. The mirror always has it. */
+function v0TeamName(backend) {
+  try {
+    const season = backend.localRepository && backend.localRepository.loadSync();
+    return (season && season.myTeam && season.myTeam.name) || null;
+  } catch {
+    return null;
+  }
 }
 
 function Splash({ label }) {
