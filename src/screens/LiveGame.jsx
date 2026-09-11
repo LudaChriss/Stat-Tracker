@@ -450,6 +450,56 @@ export default function LiveGame({ v, actions }) {
           </button>
         </Sheet>
       )}
+
+      {/* The box score did not match the plays. The game stays live. */}
+      {v.liveMismatch && (
+        <Sheet
+          onClose={actions.dismissMismatch}
+          sheetStyle={{ background: '#fff', color: C.ink, padding: '22px 20px 30px' }}
+        >
+          <div style={{ fontSize: 19, fontWeight: 800 }}>This game was not finalized</div>
+          <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 6 }}>
+            The box score on this phone does not match the plays in the account — so nothing was
+            written, and the game is still live. Nothing has been lost.
+          </div>
+          <ul
+            style={{
+              margin: '14px 0 0',
+              padding: '0 0 0 18px',
+              fontSize: 13,
+              fontWeight: 600,
+              color: C.ink,
+              lineHeight: 1.5,
+            }}
+          >
+            {v.liveMismatch.map((line) => (
+              <li key={line} style={{ marginBottom: 4 }}>
+                {line}
+              </li>
+            ))}
+          </ul>
+          <div style={{ fontSize: 12, color: C.fog, fontWeight: 600, marginTop: 12 }}>
+            Give the phones a moment to catch up with each other, then finish the game again.
+          </div>
+          <button
+            onClick={actions.dismissMismatch}
+            style={{
+              width: '100%',
+              marginTop: 16,
+              background: C.coral,
+              border: 'none',
+              color: '#fff',
+              borderRadius: 14,
+              padding: 15,
+              fontSize: 16,
+              fontWeight: 800,
+              ...btn,
+            }}
+          >
+            Keep scoring
+          </button>
+        </Sheet>
+      )}
     </div>
   );
 }

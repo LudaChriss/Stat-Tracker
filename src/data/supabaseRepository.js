@@ -146,16 +146,28 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
     // One play. Never coalesced either, and for a stronger reason than a game:
     // two events of the same kind are two different things that happened.
     event: async (payload) => {
-      const ack = await live.appendNow(payload);
-      ackListeners.forEach((fn) => {
-        try {
-          fn(ack);
-        } catch {
-          /* a broken listener does not break the queue */
-        }
-      });
+      await appendOne(payload);
+    },
+    // The tombstone. Enqueued AFTER the cancel event, so the log records the
+    // cancellation before the game stops accepting appends — the queue's
+    // strict ordering is what guarantees that, not a timer.
+    live_cancel: async ({ game }) => {
+      const gameId = await live.ensureGame(game);
+      await live.cancelGame(gameId);
     },
   };
+
+  async function appendOne(payload) {
+    const ack = await live.appendNow(payload);
+    ackListeners.forEach((fn) => {
+      try {
+        fn(ack);
+      } catch {
+        /* a broken listener does not break the queue */
+      }
+    });
+    return ack;
+  }
 
   /** Whose writes these are. Null before a session is known. */
   const owner = () => (getUserId ? getUserId() : null);
@@ -349,6 +361,24 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
         if (id) ids.add(id);
       }
       return ids;
+    },
+
+    /**
+     * Append one event and wait for the answer.
+     *
+     * Used only for the event that calls the game, where the whole point is to
+     * know it landed before the box score is checked against the log. Safe
+     * only once the queue is empty, which is the caller's job to establish —
+     * jumping ahead of queued plays would break the ordering everything else
+     * rests on.
+     */
+    appendEventNow: (game, event) => appendOne({ game, event }),
+
+    /** Abandon a live game. Queued, so it lands after the plays before it. */
+    cancelLive(game) {
+      if (!game || !game.clientId) return;
+      writes.enqueue({ kind: 'live_cancel', payload: { game }, owner: owner() });
+      flushQueue().catch(() => {});
     },
 
     /** Called with { clientEventId, seq, gameId } each time a play is accepted. */

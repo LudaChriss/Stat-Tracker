@@ -171,8 +171,10 @@ const until = async (fn, ms = 20000, step = 250) => {
  * network conditions are genuinely separate from the other's. Two tabs sharing
  * an origin would share storage, and would prove nothing.
  */
+const contexts = [];
 async function phone(name) {
   const { browserContextId } = await raw('Target.createBrowserContext', {});
+  contexts.push(browserContextId);
   const { targetId } = await raw('Target.createTarget', { url: 'about:blank', browserContextId });
   const { sessionId } = await raw('Target.attachToTarget', { targetId, flatten: true });
   logs.set(sessionId, []);
@@ -228,9 +230,14 @@ async function phone(name) {
         const matches = [...document.querySelectorAll('body *')].filter(
           (e) => norm(e).includes(want) && e.getBoundingClientRect().width > 0,
         );
-        // The deepest match: anything that has another match inside it is a
+        // A real control wins over a div that happens to contain the same
+        // words — a sheet's heading and its confirm button often both say
+        // "Finalize", and tapping the heading is not what a person does.
+        const clickable = matches.filter((e) => e.matches('button,[role=button]'));
+        const pool = clickable.length ? clickable : matches;
+        // Then the deepest: anything with another match inside it is a
         // container, not the control.
-        const el = matches.find((e) => !matches.some((o) => o !== e && e.contains(o)));
+        const el = pool.find((e) => !pool.some((o) => o !== e && e.contains(o)));
         if (!el) return null;
         el.click();
         return 'OK';
@@ -404,7 +411,27 @@ const agree = async (label) => {
   return a;
 };
 
-await agree('both phones show the same game: score, stat lines and scorebook');
+const beforeUndo = await agree('both phones show the same game: score, stat lines and scorebook');
+
+// UNDO REACHES THE OTHER PHONE'S PLAY. B takes back the walk A entered — it is
+// the last thing that happened, and whose phone it came from is not a question
+// anyone at a field wants to think about.
+eq('B: took back the play A entered', await B.tap('Undo'), 'OK');
+const afterUndo = await agree('and after B undoes A\'s play, they still agree');
+if (beforeUndo && afterUndo) {
+  eq('the scorebook is one entry shorter', afterUndo.events.length, beforeUndo.events.length - 1);
+}
+const undoRow = await until(async () => {
+  const r = await admin.from('game_events').select('kind, actor').eq('game_id', liveGame.id).order('seq');
+  const rows = r.data || [];
+  return rows.some((x) => x.kind === 'undo') ? rows : null;
+}, 20000);
+ok('the undo is an append in the log, not a deletion', !!undoRow);
+if (undoRow) {
+  eq('the play it took back is still recorded', undoRow.filter((r) => r.kind === 'outcome').length >= 3, true);
+  eq('and the undo is attributed to the phone that tapped it',
+    undoRow[undoRow.length - 1].actor === bob.id, true);
+}
 
 // =============================================================================
 console.log('\n--- phone B loses signal, and both keep scoring ----------------');
@@ -487,18 +514,168 @@ if (fromServer && converged) {
   eq('and the scorebook, play for play', converged.events, fromServer.events);
 }
 
+// =============================================================================
+console.log('\n--- phone A calls the game, and phone B is told ----------------');
+// =============================================================================
+
+eq('A: tapped Game completed', await A.tap('Game completed'), 'OK');
+eq('A: finalized', await A.tap('Finalize & update standings'), 'OK');
+
+const finishedRow = await until(async () => {
+  const r = await admin.from('games').select('*').eq('id', liveGame.id);
+  const row = (r.data || [])[0];
+  return row && row.status === 'final' ? row : null;
+}, 30000);
+if (!finishedRow) {
+  const s = await A.state();
+  console.log('  A status  : ' + JSON.stringify((await admin.from('games').select('status').eq('id', liveGame.id)).data));
+  console.log('  A mismatch: ' + JSON.stringify(s && s.liveMismatch));
+  console.log('  A state   : ' + JSON.stringify({ active: s && s.gameActive, final: s && s.gameFinal, screen: s && s.screen }));
+  console.log('  A queue   : ' + String(await A.get('score-tracker:queue')).slice(0, 700));
+  console.log('  A screen  : ' + String(await A.js(`document.body.textContent.replace(/\\s+/g,' ').trim().slice(0,240)`)));
+  console.log('  A said    : ' + (A.logs().slice(-6).join('\n              ') || 'nothing'));
+}
+ok('the game is final in the account', !!finishedRow);
+need('a finished game', !!finishedRow);
+
+eq('and there is still exactly one row for it',
+  ((await admin.from('games').select('id').eq('client_id', liveGame.client_id)).data || []).length, 1);
+
+// The box score written must be the one the log produces — that is the check
+// doFinalize makes before it writes, and this is it made from outside.
+const closedLog = (await admin.from('game_events').select('*').eq('game_id', liveGame.id).order('seq')).data || [];
+eq('the log ends with the event that called the game', closedLog[closedLog.length - 1].kind, 'final');
+
+const fromClosedLog = replay(
+  { ...seeded, history: [] },
+  closedLog.map((r) => ({
+    clientEventId: r.client_event_id, seq: Number(r.seq), kind: r.kind, payload: r.payload || {},
+  })),
+);
+const writtenLines = (await admin.from('game_lines').select('*').eq('game_id', liveGame.id)).data || [];
+const ourLines = writtenLines.filter((l) => l.home_away === 'home');
+const theirRuns = writtenLines.filter((l) => l.home_away === 'away').reduce((n, l) => n + l.r, 0);
+
+eq('the score written is the score the plays add up to',
+  [finishedRow.home_score, finishedRow.away_score], [fromClosedLog.score.home, fromClosedLog.score.away]);
+eq('and the opposition runs in the box score agree with it', theirRuns, fromClosedLog.score.away);
+eq('every player in our order has a line', ourLines.length, fromClosedLog.lineup.length);
+ok('and each of ours is linked to a real player, not just a name',
+  ourLines.every((l) => l.player_id), ourLines.filter((l) => !l.player_id).map((l) => l.name_snapshot).join(', '));
+
+// Phone B was in that game. It must be told, and taken out of it.
+const bTold = await until(async () => {
+  const s = await B.state();
+  if (!s || s.gameActive) return null;
+  return s;
+}, 30000);
+ok('phone B was taken out of the game it was scoring', !!bTold,
+  'B is still live: ' + JSON.stringify((await B.state() || {}).score));
+if (bTold) {
+  eq('and is not left on the live screen', bTold.screen === 'live', false);
+  eq('with no half-finished log left behind', [(bTold.gameLog || []).length, (bTold.serverLog || []).length], [0, 0]);
+}
+
+const bHistory = await until(async () => {
+  const s = await B.state();
+  return s && (s.history || []).some((g) => g.id === liveGame.client_id) ? s : null;
+}, 30000);
+ok('and the finished game reached phone B\'s season', !!bHistory,
+  'history: ' + JSON.stringify(((await B.state()) || {}).history || []).slice(0, 200));
+
+// A play arriving after the whistle is refused rather than quietly accepted.
+const late = await bob.client.rpc('append_game_event', {
+  p_game_id: liveGame.id, p_client_event_id: `late-${stamp}`, p_kind: 'outcome', p_payload: {},
+});
+ok('a play entered after the game was called is refused by name',
+  !!late.error && String(late.error.message).includes('already final'),
+  late.error ? late.error.message : 'it was accepted');
+
+// =============================================================================
+console.log('\n--- a game cancelled on one phone ends on both -----------------');
+// =============================================================================
+
+// The offer to join is refreshed on a timer, so for a few seconds after the
+// last game ended it can still be showing. Wait it out rather than racing it.
+eq('A: started a second game', await A.tap('Tap to start scoring', 25000), 'OK');
+eq('A: started it', await A.tap('Start game'), 'OK');
+eq('A: opened the entry tab', await A.tap('ENTRY'), 'OK');
+eq('A: scored a play', await A.tap('Single'), 'OK');
+
+const secondGame = await until(async () => {
+  const r = await admin.from('games').select('*').eq('home_team_id', teamId).eq('status', 'live');
+  return (r.data || [])[0] || null;
+}, 25000);
+ok('the second game reached the account', !!secondGame);
+need('a second game', !!secondGame);
+
+ok('phone B is offered the second game',
+  !!(await until(async () => {
+    const text = await B.js(`document.body.textContent.replace(/\\s+/g,' ')`);
+    return text && text.includes('being scored now') ? text : null;
+  }, 35000)));
+eq('B: joined it', await B.tap('Tap to join and score it too'), 'OK');
+ok('phone B is in the second game',
+  !!(await until(async () => {
+    const s = await B.state();
+    return s && s.gameActive && s.gameClientId === secondGame.client_id ? s : null;
+  }, 25000)));
+
+eq('A: tapped Cancel game', await A.tap('Cancel game'), 'OK');
+eq('A: confirmed', await A.tap('Discard game'), 'OK');
+
+const cancelledRow = await until(async () => {
+  const r = await admin.from('games').select('*').eq('id', secondGame.id);
+  const row = (r.data || [])[0];
+  return row && row.status === 'cancelled' ? row : null;
+}, 30000);
+ok('the game is marked cancelled in the account, not deleted', !!cancelledRow,
+  'status: ' + JSON.stringify((await admin.from('games').select('status').eq('id', secondGame.id)).data));
+
+const cancelLog = (await admin.from('game_events').select('kind').eq('game_id', secondGame.id).order('seq')).data || [];
+ok('and the whole log is kept, ending in the cancellation',
+  cancelLog.length >= 3 && cancelLog[cancelLog.length - 1].kind === 'cancel',
+  JSON.stringify(cancelLog.map((r) => r.kind)));
+
+const bEnded = await until(async () => {
+  const s = await B.state();
+  return s && !s.gameActive ? s : null;
+}, 30000);
+ok('phone B was taken out of the cancelled game too', !!bEnded);
+
+const bSeason = await B.state();
+eq('and it is not in phone B\'s history — a cancelled game is not a result',
+  (bSeason.history || []).some((g) => g.id === secondGame.client_id), false);
+eq('nor in phone A\'s', ((await A.state()).history || []).some((g) => g.id === secondGame.client_id), false);
+
 // ---- nothing fell over anywhere ----------------------------------------------
 for (const p of [A, B]) {
   const crashed = await p.js(`!!document.body.textContent.match(/Something went wrong|TEMPLATES/)`);
   eq(`${p.name} never fell into its error boundary`, crashed, false);
   const bad = p.logs().filter((l) => l.startsWith('uncaught'));
   eq(`${p.name} reported no uncaught errors`, bad, []);
+  // Warnings too. A duplicate React key was how the double sign-in import
+  // announced itself, and nobody was listening.
+  eq(`${p.name} logged nothing to the console at all`, p.logs(), []);
 }
 
 if (fail) {
   console.log('\nphone A said: ' + (A.logs().join('\n              ') || 'nothing'));
   console.log('phone B said: ' + (B.logs().join('\n              ') || 'nothing'));
 }
+
+// Put the browser back as it was found. Each run opens two private contexts;
+// leaving them behind means the next run starts in a browser carrying every
+// previous run's windows, which is how a session ends up disappearing
+// mid-test for reasons that have nothing to do with the app.
+for (const browserContextId of contexts) {
+  try {
+    await raw('Target.disposeBrowserContext', { browserContextId });
+  } catch {
+    /* already gone */
+  }
+}
+
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 ws.close();
 process.exit(fail ? 1 : 0);

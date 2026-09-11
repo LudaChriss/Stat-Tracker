@@ -721,6 +721,8 @@ export function deriveView(s, actions) {
 
     // ---- Finalize ----------------------------------------------------------
     confirmFinal: s.confirmFinal,
+    // Why a game refused to finalize, in the database's terms and the app's.
+    liveMismatch: s.liveMismatch,
     confirmCancelGame: s.confirmCancelGame,
     // What is about to be thrown away, so the warning is concrete.
     cancelSummary: `${s.myTeam.name} ${s.score.home} — ${opponentTeam(s).name} ${s.score.away}`,

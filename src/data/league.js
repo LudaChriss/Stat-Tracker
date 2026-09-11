@@ -119,6 +119,7 @@ export const INITIAL_STATE = {
   liveConnected: false,
   finalPrompted: false,
   liveMismatch: null,
+  liveEnded: null,
   joinable: null,
   bookOff: null,
   posMenu: null,

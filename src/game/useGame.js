@@ -6,7 +6,8 @@ import { saveSeasonFile } from './export.js';
 import { applySeason, parseSeasonFile } from './importSeason.js';
 import { requestPersistence } from './storage.js';
 import { buildGameRecord, applyMoveLineup, opponentTeam } from './logic.js';
-import { createReplayer, liveSlice, mergeLog, undoTarget } from './events.js';
+import { createReplayer, liveSlice, logStatus, mergeLog, replay, undoTarget } from './events.js';
+import { reconcileBoxScore } from './reconcile.js';
 
 const TOAST_MS = 2600;
 const SYNC_MS = 3200;
@@ -169,6 +170,25 @@ export function useGame(injectedRepository) {
     if (derived.confirmFinal && !s.finalPrompted) {
       out.confirmFinal = true;
       out.finalPrompted = true;
+    }
+
+    // The game ended somewhere else. The log says so — a cancel or a final
+    // event from the other phone — and this phone has to stop being in it,
+    // rather than sitting on a live screen for a game that is over.
+    if (s.gameActive && (derived.cancelled || derived.finalized)) {
+      out.liveEnded = derived.cancelled ? 'cancelled' : 'final';
+      out.screen = s.screen === 'live' ? 'league' : s.screen;
+      out.liveTab = 'entry';
+      out.confirmFinal = false;
+      out.confirmCancelGame = false;
+      out.selRunner = null;
+      out.gameLog = [];
+      out.serverLog = [];
+      out.gameClientId = null;
+      out.gameStartedAt = null;
+      out.liveGameId = null;
+      out.liveConnected = false;
+      out.finalPrompted = false;
     }
     return out;
   }, []);
@@ -374,6 +394,38 @@ export function useGame(injectedRepository) {
   }, [state.liveGameId, state.gameActive, repository, acceptServerEvents, patch]);
 
   /**
+   * The game ended on the other phone.
+   *
+   * Say so — a screen that simply empties is indistinguishable from the app
+   * losing the game — and then ask the account for the season again, so a game
+   * that was finalised elsewhere appears in the history here rather than on the
+   * next cold start.
+   */
+  useEffect(() => {
+    if (!state.liveEnded) return;
+    const how = state.liveEnded;
+    patch({ liveEnded: null });
+    toast(
+      how === 'cancelled'
+        ? 'That game was cancelled on another phone'
+        : 'That game was finalized on another phone',
+      3600,
+    );
+    if (how !== 'final') return;
+    repository
+      .load()
+      .then((loaded) => {
+        // Only the history: the rest of this device's state is its own.
+        if (loaded && loaded.history) {
+          setState((cur) => ({ ...cur, history: loaded.history }));
+        }
+      })
+      .catch(() => {
+        /* the next launch will pick it up */
+      });
+  }, [state.liveEnded, repository, patch, toast]);
+
+  /**
    * Is somebody else already scoring a game for this team?
    *
    * Asked while this phone is NOT in a game, so it can offer to join rather
@@ -499,6 +551,16 @@ export function useGame(injectedRepository) {
           toast('That game has not been scored yet');
           return;
         }
+        // The offer is refreshed on a timer, so it can be a few seconds out of
+        // date — long enough for the game to have been finished or thrown away
+        // on the other phone. Joining it then would drop someone into a game
+        // that is already over.
+        const status = logStatus(events);
+        if (status !== 'live') {
+          patch({ joinable: null });
+          toast(status === 'cancelled' ? 'That game was cancelled' : 'That game has finished', 3000);
+          return;
+        }
 
         setState((cur) =>
           withLog(
@@ -611,14 +673,32 @@ export function useGame(injectedRepository) {
       dismissCancelGame: () => patch({ confirmCancelGame: false }),
 
       /**
-       * Throw the in-progress game away. Nothing is written to history, so
-       * standings and season stats are untouched — it is as if it never
-       * started. The batting order is kept so another game can be started
-       * straight away.
+       * Throw the in-progress game away.
+       *
+       * Nothing is written to history, so standings and season stats are
+       * untouched. What IS written, when the game reached an account, is a
+       * cancel event and a tombstone on the row — the log is not deleted and
+       * the game does not silently disappear from the other scorer's phone. It
+       * stops being live, says so, and stays readable.
        */
-      cancelGame: () =>
-        setState((s) => ({
-          ...s,
+      cancelGame: () => {
+        const s = stateRef.current;
+        const descriptor = describeGame(s);
+        if (descriptor && repository.appendEvent) {
+          repository.appendEvent(descriptor, {
+            clientEventId: newEventId(),
+            kind: 'cancel',
+            payload: {},
+            seq: null,
+            at: Date.now(),
+          });
+          // Queued after the event, so the log records the cancellation before
+          // the game stops accepting appends. The queue's strict ordering is
+          // what guarantees that — not a timer.
+          if (repository.cancelLive) repository.cancelLive(descriptor);
+        }
+        setState((cur) => ({
+          ...cur,
           screen: 'newgame',
           gameActive: false,
           gameFinal: false,
@@ -648,18 +728,99 @@ export function useGame(injectedRepository) {
           liveConnected: false,
           finalPrompted: false,
           liveMismatch: null,
-        })),
+        }));
+      },
 
       // Finalizing
       askFinalize: () => patch({ confirmFinal: true }),
       cancelFinalize: () => patch({ confirmFinal: false }),
-      doFinalize: () => {
+      dismissMismatch: () => patch({ liveMismatch: null }),
+
+      /**
+       * Call the game.
+       *
+       * For a game that never reached an account — scored on a phone with no
+       * backend, or with no signal from the first pitch — this is exactly what
+       * it has always been: freeze the box score, put it in the history, hand
+       * it to the repository. Nothing below changes that path.
+       *
+       * For a shared game there is one more step, and it is the point of the
+       * slice: the box score about to be written must equal a replay of the
+       * account's own log, or the game is not finalised and the reason is put
+       * on screen. The order matters —
+       *
+       *   1. drain the queue, so every play this phone holds is up;
+       *   2. append the event that CALLS the game, and wait for it;
+       *   3. read the whole log back and replay it;
+       *   4. compare, on the figures a person would see.
+       *
+       * Appending before reading is what makes step 4 sound: anything entered
+       * on another phone before the call is in the log by then, so it is either
+       * accounted for or named as a difference. Anything entered after the call
+       * is refused by save_game, which will not write a box score the log has
+       * moved on from.
+       */
+      doFinalize: async () => {
+        const s = stateRef.current;
         // Freeze the box score before the live state is torn down. Built out
         // here rather than inside the updater so the updater stays pure.
-        const record = buildGameRecord(stateRef.current);
-        setState((s) => ({
-          ...s,
-          history: [...s.history, record],
+        const record = buildGameRecord(s);
+
+        if (s.liveGameId && repository.fetchEvents && repository.appendEventNow) {
+          const descriptor = describeGame(s);
+          try {
+            if (repository.flushNow) await repository.flushNow();
+
+            const stuck = repository.queuedEventIds ? repository.queuedEventIds().size : 0;
+            if (stuck) {
+              patch({
+                confirmFinal: false,
+                liveMismatch: [
+                  `${stuck} ${stuck === 1 ? 'play has' : 'plays have'} not reached the account yet. ` +
+                    'They have not been lost — finish the game once they go through.',
+                ],
+              });
+              return;
+            }
+
+            await repository.appendEventNow(descriptor, {
+              clientEventId: newEventId(),
+              kind: 'final',
+              payload: {},
+              seq: null,
+              at: Date.now(),
+            });
+
+            const events = await repository.fetchEvents(s.liveGameId, 0);
+            const fromLog = replay(s, events);
+            const logRecord = fromLog
+              ? buildGameRecord({ ...fromLog, gameStartedAt: s.gameStartedAt })
+              : null;
+
+            const verdict = reconcileBoxScore(record, logRecord);
+            if (!verdict.ok) {
+              patch({ confirmFinal: false, liveMismatch: verdict.differences });
+              return;
+            }
+          } catch {
+            // The account could not be reached. A game is never held hostage to
+            // that: fall through to the path a phone with no signal takes, and
+            // put the call itself in the queue so the log records it in order.
+            if (descriptor && repository.appendEvent) {
+              repository.appendEvent(descriptor, {
+                clientEventId: newEventId(),
+                kind: 'final',
+                payload: {},
+                seq: null,
+                at: Date.now(),
+              });
+            }
+          }
+        }
+
+        setState((cur) => ({
+          ...cur,
+          history: [...cur.history, record],
           confirmFinal: false,
           gameActive: false,
           gameFinal: true,

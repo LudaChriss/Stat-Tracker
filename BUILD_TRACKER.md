@@ -583,14 +583,17 @@ user's, which is what they were.
 
 | Slice | Description | Status |
 |---|---|---|
-| 3a | Append-only command log; live state derived by replay | todo |
-| 3b | Realtime subscription; two phones on one game stay in sync | todo |
-| 3c | Concurrency: chosen strategy documented and tested | todo |
-| 3d | Cancel / undo / finalize correct in the shared model | todo |
+| 3a | Append-only command log; live state derived by replay | **green** |
+| 3b | Realtime subscription; two phones on one game stay in sync | **green** |
+| 3c | Concurrency: chosen strategy documented and tested | **green** (D13) |
+| 3d | Cancel / undo / finalize correct in the shared model | **green** |
 | — | **Pulled forward: a finalized game is written to the backend** | **green** |
 | — | **Pulled forward: past games can be sent to the backend on demand** | **green** |
 
 ### What was pulled forward, and what it is not
+
+_Written before 3a–3d were built. Everything listed as deferred below has since
+been done; kept as the record of what the slice was and was not._
 
 The phase 3 design is an append-only event log with live state derived by
 replay. That is still the design. What was pulled forward is only the *end* of
