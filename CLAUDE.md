@@ -66,8 +66,15 @@ Write the script to a file and run the file.
 - Suites that need the database skip cleanly without a local Supabase, so
   `npm test` still passes on a machine with no Docker.
 - Browser harnesses are run by hand, not by `npm test`: `browser-save-game.mjs`,
-  `browser-backfill.mjs`, `browser-session.mjs`, `browser-parked.mjs`. Each needs a dev server on
+  `browser-backfill.mjs`, `browser-session.mjs`, `browser-parked.mjs`,
+  `browser-invites.mjs`, `browser-two-phones.mjs`. Each needs a dev server on
   :5173 and Chrome on `--remote-debugging-port=9222`.
+- `browser-two-phones.mjs` opens **two private browser contexts** so the two
+  phones have genuinely separate localStorage and separate network conditions —
+  two tabs on one origin share storage and would prove nothing. It disposes both
+  contexts when it finishes; a run that dies partway leaves them behind, and
+  enough of those will start killing CDP sessions mid-test for reasons that have
+  nothing to do with the app. Restart Chrome if it starts behaving oddly.
 - `session-expiry.mjs` and `browser-session.mjs` need genuinely short-lived
   tokens: set `jwt_expiry = 8` under `[auth]` in `supabase/config.toml` and
   restart the stack. **Put it back to 3600 afterwards** — an 8-second token

@@ -1,3 +1,311 @@
+# Report — phase 3, live shared scoring (3a, 3b, 3c, 3d)
+
+All four slices built and green. **1044 assertions across 33 suites, build
+clean, viewport audit clean, every browser harness re-run and passing.** Nothing
+was pushed. The hosted project was not touched.
+
+**Read §5 before you deploy anything.** Three new migrations, and one of them
+changes `save_game` — a function the live app calls on every finalised game.
+
+**The headline: a game in progress is no longer only on one phone.** Every play
+is written as it happens. Two phones can score the same game and both see the
+combined result. A phone that loses signal keeps scoring and catches up.
+
+---
+
+## 1. What mid-game exposure is now, versus before
+
+This is the thing phase 3 was for, so it goes first.
+
+**Before.** Nothing about a game in progress left the phone. The whole game —
+every play, the score, every stat line — existed in one browser's localStorage
+until somebody tapped *Game completed*. Lose the phone in the 5th, drop it in a
+puddle, have the browser evict site data, and the game had never happened. There
+was no partial recovery, because there was nothing partial: the first and only
+write was at the final whistle.
+
+**Now.** A play is written as it is entered. The exposure is **whatever has not
+yet left the write queue** — which is:
+
+| Situation | What is at risk if the phone is lost right now |
+|---|---|
+| Signed in, signal fine | The play being sent this second. In practice one play, usually less than a second old. |
+| Signed in, no signal | Every play since the signal went. Still **durable on the device** — the queue is in localStorage and survives a reload, a crash and a battery death. Lost only if the phone itself is lost or its site data is cleared. |
+| Signed in, second phone also scoring | Nothing, effectively. Anything the other phone has seen is already in the account. |
+| Not signed in at all | The whole game, exactly as before. Nothing is sent because there is nowhere to send it. The moment you sign in mid-game, the game so far goes up as one `resume` event and the exposure drops to the first row. |
+
+What has **not** changed: the finished game is still written whole at
+finalisation, still verified on read-back, still queued and retried if it cannot
+go. None of that was touched.
+
+One more thing worth knowing: a game abandoned by walking away — phone flat, app
+closed, never finalised — now leaves a `live` row and its log in the account.
+That is a recovery, not a leak: the plays are there. But see §3, those rows stay
+live indefinitely.
+
+---
+
+## 2. What was built, and how far it was verified
+
+### Verified in two real browsers, end to end
+
+`test/browser-two-phones.mjs` — 81 assertions. Two separate browser contexts,
+two separate accounts, two separate stores of localStorage, one game. Run by
+hand like the other browser harnesses. In order, it drives:
+
+- A manager starts a game and scores a play — and the game reaches the account
+  **while it is still being played**, as a `live` row with its log.
+- A scorer on the same team, on the other phone, is **offered** that game
+  ("being scored now"), joins it, and lands on the same score, because it
+  replays the same log.
+- Both phones score; each one sees the other's play.
+- **One phone takes back the other's play.** The undo is an append in the log,
+  not a deletion; the play it took back is still recorded; it is attributed to
+  the phone that tapped it.
+- Phone B loses signal, scores two plays anyway, while phone A scores one. The
+  two visibly disagree — checked, so the next step is not vacuous.
+- B comes back. Its plays replay **in its own order, after the server's**, and
+  both phones converge on the game the account's log produces — same score, same
+  stat lines, same scorebook, play for play.
+- A calls the game. The box score written is the one the plays add up to; there
+  is still exactly one row; B is taken out of the game, told, and the finished
+  game reaches B's season. A play entered after the whistle is refused by name.
+- A second game is started, joined, and then **cancelled** on A. The row is
+  marked cancelled rather than deleted, the whole log is kept, B is taken out of
+  it, and it is in nobody's history — a cancelled game is not a result.
+
+Both phones are also required to log **nothing to the console at all**, warnings
+included. That is how the sign-in bug in §3 announced itself, and nobody was
+listening.
+
+Also re-run in a browser and passing unchanged: `browser-save-game`,
+`browser-backfill`, `browser-parked`, `browser-invites`, and `browser-session`
+(with the short-token config, put back to 3600 afterwards).
+
+### Verified against the real database, not the browser
+
+- `live-events-check.mjs` — the server assigns the sequence; ten simultaneous
+  appends from two accounts all succeed and come back numbered 3–12 with no gaps
+  and no duplicates; an append is idempotent on the entering device's own event
+  id; a manager and a scorer take turns with no claim in between; a viewer and a
+  stranger are refused; the log cannot be edited or deleted by anyone; a
+  finished or cancelled game refuses further plays by name — but a **retry** of
+  an already-accepted play still succeeds, because the queue cannot tell a
+  timeout from a success.
+- `finish-shared-check.mjs` — the scorer who did not start the game finishes it,
+  and there is exactly one row; a box score the log has moved on from is refused
+  and the game stays live; cancelling keeps the row and the whole log; a
+  finalised game cannot then be cancelled; and **a game with no event log at all
+  still saves exactly as it always did**, with every old guard in force.
+
+### Verified in tests only
+
+- `events-check.mjs`, `concurrency-check.mjs`, `reconcile-check.mjs` — the fold
+  itself: replay, undo resolution, the merge rule, 300 randomised two-phone
+  games, and the box-score comparison. Pure, no database.
+- The **"this box score does not match the plays" sheet** renders from tests
+  only. It appears only when a finalise is refused, which the browser harness
+  does not currently provoke; the refusal path itself is verified against the
+  database.
+- The `offline-queue-check.mjs` additions (overlapping flushes) are unit-level.
+  The bug they pin was found *through* the browser, but the pin is a unit test.
+
+### Not verified anywhere
+
+- Two phones holding **different rosters** for the same team. Both phones in the
+  harness read the same season from the account.
+- **Three or more phones.** Nothing in the design cares, but nothing has run it.
+- Realtime against a **hosted** Supabase project. Only the local stack.
+- A game long enough to make the log big. The longest thing exercised is a
+  couple of dozen plays.
+
+---
+
+## 3. Judgement calls
+
+Each of these went the safer way, and each one is a real choice.
+
+**Live state is now derived by replay on every device, including with no
+backend at all.** One code path rather than two. The alternative — mutate
+locally and replay only when shared — means two implementations of what a double
+does, and they drift. The scoring engine itself is untouched; it is the fold.
+
+**A game already in progress opens its log with a `resume` event** carrying the
+game exactly as it stands. Without it, a game being scored when this version
+arrives — or one started while signed out — would sit on a phone that no longer
+responds to a tap. Nothing already scored is lost, and a second phone joining
+replays the whole game rather than the rest of it.
+
+**Undo names the play it takes back.** With one scorer that changes nothing.
+With two it is the difference between both people undoing the same double entry
+once, and undoing it *and then an innocent play behind it*. An undo whose target
+is already gone does nothing rather than falling back.
+
+**Undo reaches plays only** — not batting-order changes, not the track-both
+switch. An undo that silently reshuffled the order while the scorer thought they
+were taking back a strikeout would be worse than no undo.
+
+**Batting-order changes and the track-both switch ARE events.** They are not
+cosmetic: the order decides who is up, and therefore whose stat line a play is
+written to. Two phones disagreeing about it would file plays against the wrong
+players. Fielding-position overrides and the scorebook page offset are *not*
+synced — they are one person's screen.
+
+**Finalising reconciles on the client; the server closes the remaining window.**
+The comparison is done in the app, because doing it in Postgres would mean a
+second implementation of the scoring engine in plpgsql. The gap that leaves — a
+play landing between the check and the write — is closed by `save_game` itself,
+which refuses a box score if anything was appended after the event that called
+the game.
+
+**Realtime AND a poll every six seconds.** Not belt and braces. A live socket
+over a mobile network drops messages and whole connections without reporting
+either, and a play that was genuinely written staying invisible for the rest of
+the game is not a trade worth making to save a request. Realtime makes it
+immediate; the poll makes it certain.
+
+**Joining is offered, never automatic.** A card that says a game is being scored
+now. Landing someone in a game they did not open is how plays get entered
+against the wrong game. The offer is refreshed every fifteen seconds, and
+tapping a stale one is refused rather than joining a finished game.
+
+**A play refused after the whistle parks as a visible write** rather than being
+dropped. It will sit in the parked-writes list with the database's own words.
+That is loud, and it is meant to be: the device believes something happened that
+the account does not know about.
+
+**History now excludes games that are not final.** A games row exists from the
+first pitch, so mapping every row would file a game still being played — and one
+that was cancelled — as a completed 0-0 result and move the standings with it. A
+row with no status at all is treated as final: that is every row written before
+this mattered.
+
+**`game_events` keeps its direct INSERT policy.** Row-level security still lets
+a scorer insert a row directly and choose its own `seq`, which the app never
+does — it only uses `append_game_event`. The policy is kept so the existing RLS
+suites and their semantics are unchanged. A scorer abusing it could only disrupt
+their own team's game, which they could already do by entering false plays.
+
+**A league admin can score too.** `can_score_game` has always said so; the
+decision in D13 names scorer and manager, and league admin is a superset of that,
+not a new grant.
+
+**Two people entering the same play makes two plays.** Deliberately, and D13
+argues it at length. There is no automatic de-duplication because "the same
+play" is not something a program can recognise. The mitigation is live sync and
+undo.
+
+### Found on the way, and fixed, because live scoring made them reachable
+
+**The write queue lost writes when two flushes overlapped.** A play is appended
+every few seconds and each append asks the queue to drain, so overlapping
+flushes stopped being theoretical. Two of them read the same pending list and
+the second one's write-back resurrected or erased what the first decided — and a
+write enqueued *during* a flush was simply gone, with no error and nothing
+parked. Flushes are now serialised, and each one writes back a set of changes
+against a fresh read rather than the snapshot it started from. Pinned by three
+new cases in `offline-queue-check.mjs`.
+
+**`writeGame` and `writeSeason` returned quietly when the team id was not
+resolved yet**, which marked the queue entry applied and dropped it. They now
+wait instead.
+
+**Signing in reconciled twice.** Outside phase 3, and it blocked the two-phone
+harness, so it is fixed. The explicit `getSession` and the `INITIAL_SESSION`
+event each started a full reconciliation, so a first sign-in with a season to
+upload ran `import_season_and_claim` **twice**, milliseconds apart. Confirmed
+against a real database: two complete sets of opposing teams, after which the
+read-back check correctly reported that the upload did not match the device,
+discarded it, and told the person their season could not be uploaded — for a
+season that was perfectly fine. Reconciliations for the same account now collapse
+into one, and the two-phone harness checks the team count after sign-in.
+
+---
+
+## 4. Unfinished, and what to watch
+
+- **A `live` row is never cleaned up.** A game abandoned without being finalised
+  or cancelled — phone flat, app closed, walked away — stays `live` in the
+  account forever, and another phone on that team will keep being offered to
+  join it. Nothing is wrong with the data; it is clutter, and it will be
+  confusing the first time it happens. There is no "abandon this stale game"
+  path and no age cutoff. This is the first thing I would add.
+- **The join offer only looks at the primary team.** Phase 4 territory.
+- **A long log is fetched whole** when joining and on the first catch-up after a
+  reconnect. Fine at rec-game scale; there is no pagination.
+- **The mismatch sheet has not been through the viewport audit**, because it
+  only appears on a refused finalise and `viewports.mjs` drives screens rather
+  than error states.
+- **A live spectator view** is phase 5. A viewer can already *read* the log —
+  RLS allows it — but there is no screen that shows it.
+- **The event log is never pruned.** Every play of every game stays in
+  `game_events` forever. At rec-league volume that is nothing, and it is what
+  makes a game reconstructible. Worth knowing before it is a surprise.
+
+---
+
+## 5. New migrations — LOCAL ONLY, all three pending
+
+None has been applied to the hosted project. `npx supabase migration list
+--linked` will show these three, on top of `_014` and `_015` from the last
+session, which are also still pending.
+
+| Migration | What it does | Risk |
+|---|---|---|
+| `20260101000016_live_event_log` | Adds `client_event_id` to `game_events` + a unique index; adds `start_live_game` and `append_game_event` | New column and new functions. Nothing existing is altered. The column is nullable so the direct-insert path RLS already allows keeps working |
+| `20260101000017_realtime_game_events` | Adds `game_events` to the `supabase_realtime` publication; adds an index on `games(status)` | Publication + index only. Grants nobody anything — Realtime applies the table's own SELECT policy before relaying |
+| `20260101000018_finish_a_shared_game` | Adds `cancel_live_game`; **replaces `save_game`** | **Touches a live function.** See below |
+
+`_018` is the one to think about. `save_game` keeps its exact signature — no new
+parameter, deliberately, because even a defaulted one would create a second
+overload and leave the old version live, which is the trap `_012` had to be
+rescued from. What changes inside it:
+
+- it finds an existing game row for this client id **whoever created it**, and
+  updates that row rather than inserting under the author's own key;
+- it refuses a game that was cancelled;
+- it refuses a box score when the log has moved on past the event that called
+  the game.
+
+For a game with **no event log** — which is every game the hosted app has ever
+written, and every game a phone scores while signed out — none of those three
+paths is reached. The insert, the conflict target, the guards, the box-score
+replacement and the perspective flip are unchanged. `finish-shared-check.mjs`
+checks that directly, as its own section.
+
+Applying all three takes the hosted project to 19 migrations.
+
+---
+
+## 6. Deploy order
+
+**Order matters, and it is not the same as last time: the migrations must go
+first.** The client code calls `start_live_game` and `append_game_event` on the
+first play of the first game after it loads. Deploy the code without `_016` and
+every play becomes a queued write failing with "function not found" — retried
+forever, invisible, until the migration lands. Nothing would be lost, but the
+first game after the deploy would be scored with no idea whether it was reaching
+the account.
+
+1. **Export the season from the phone first.** As always.
+2. **`npx supabase db push`** — applies `_014`, `_015`, `_016`, `_017`, `_018`
+   in that order. `_018` must not be applied without `_016`: it refers to event
+   kinds that only exist once the log does. The CLI applies them in order, so
+   pushing them together is correct; do not cherry-pick.
+3. **Check Realtime is enabled** on the hosted project before relying on `_017`.
+   If it is not, the app still works — the six-second poll carries it — but a
+   second phone will be a few seconds behind rather than immediate.
+4. **Then push the code** (`git push`).
+5. **First game after the deploy: watch the LIVE header.** It says `· SHARED`
+   once the game has reached the account. If it does not, the game is being
+   scored locally and queued, which is safe, but it means step 2 did not take.
+
+**If you would rather not deploy this yet: don't.** Everything that exists today
+keeps working without any of it. Phase 3 is entirely additive at the product
+level — the single-phone flow is the same flow, and its path through `save_game`
+is the same path.
+
+---
 # Report — phases 2b and 2c
 
 Built while you were away. **854 assertions across 28 suites, build clean,
