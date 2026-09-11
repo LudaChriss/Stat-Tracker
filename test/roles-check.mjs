@@ -92,7 +92,13 @@ const league = await leagueAdmin.client.rpc('create_league_with_admin', { league
 eq('setup: the league was created', !league.error, true);
 const leagueId = league.data;
 
-const team = await manager.client.rpc('create_team_with_manager', { team_name: `Roles FC ${stamp}`, league: leagueId });
+// Created OUTSIDE the league. Since 4a a team can only enter a league whose
+// code its manager has redeemed, and this manager has not — putting a team
+// into somebody else's league by naming its id is exactly what that guard
+// stops. The next line places it with the service key, which is what an admin
+// doing it on their own league amounts to here; this suite is about role
+// reach, not about joining.
+const team = await manager.client.rpc('create_team_with_manager', { team_name: `Roles FC ${stamp}` });
 eq('setup: the team was created', !team.error, true);
 const teamId = team.data;
 
