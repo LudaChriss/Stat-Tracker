@@ -830,6 +830,71 @@ Retrying preserves order. A revived entry keeps its original sequence number, so
 it returns to its place in the queue rather than jumping to the end — the strict
 ordering promise holds across a failure and a retry, not just in the happy path.
 
+### D13 — Concurrency: an append-only log in the server's order, and no lease
+
+**The decision.** Any member holding **scorer** or **manager** on the team may
+enter plays on a live game. There is no lease, no claim to take and release, and
+no single active scorer. (A league admin of the game's league can too, which is
+what `can_score_game` has always said; it is a superset, not a new rule.)
+
+The concurrency strategy *is* the append-only log with a **server-assigned
+sequence**. Appends from several phones interleave in the order the server gives
+them. Nothing merges, nothing is dropped, and no phone's version of the game
+overwrites another's — there is no version to overwrite, only a list to fold.
+
+**Why not a lease.** A lease has to be released, and the phone holding it is the
+one that walks out of signal range, or goes flat, or gets put in a bag at the
+end of the third. Every lease design ends up needing a way to break the lease,
+and at that point the thing it was protecting against — two people scoring at
+once — is back, only now it is a surprise. Scorekeeping at a rec game is two
+people with phones and no protocol between them; the software should match that
+rather than impose an order of turns nobody at the field agreed to.
+
+**Why the server assigns the sequence.** The schema originally described
+`UNIQUE(game_id, seq)` as a compare-and-swap: a client proposes the next number
+and loses the race if someone else claimed it. That works, and it pushes a retry
+loop onto a phone with one bar of signal, where the loser of the race is a
+person who has to tap again. `append_game_event` takes a per-game advisory lock
+instead and reads `max(seq)+1` under it. Two phones appending at the same
+instant both succeed, one after the other. Ten at once, from two accounts, come
+back numbered 3 to 12 with no gaps and no duplicates — proved in
+`live-events-check.mjs`, not argued.
+
+**What a phone shows before its plays are accepted.** Its own view, with its own
+unsent plays folded on the end, in the order it entered them. That view is
+provisional: when those plays land after somebody else's, the same plays produce
+a different state, and the phone's screen changes to match. This is not a defect
+being tolerated — it is the only ordering every phone can agree on, and the
+alternative is two phones that never agree at all.
+
+**The accepted cost: two people entering the same play makes two plays.**
+Deliberately. There is no automatic de-duplication and there should not be,
+because "the same play" is not something a program can recognise: two runners
+really do score on consecutive pitches, two batters really do walk in a row.
+Any rule that silently dropped the second one would eventually drop a real play,
+and a missing run nobody saw happen is far worse than a duplicate run both
+scorers can see.
+
+The mitigation is visibility and reversal, not detection:
+
+- **Live sync**, so the other scorer's play is on your screen in about a second
+  rather than at the end of the inning. Most double entries never happen,
+  because the first entry is already visible.
+- **Undo**, which appends a reversing event and takes back the last play
+  *whoever entered it* — so either scorer can fix it, and neither has to be the
+  one who made the mistake.
+
+An undo names the play it is taking back. Two people both undoing the same
+double entry take it back once, rather than taking back the duplicate and then
+an innocent play behind it.
+
+**Where this is proved.** `concurrency-check.mjs` (300 random two-phone games:
+nothing dropped, nothing folded twice, the accepted order preserved, and both
+phones converging), `live-events-check.mjs` (the database half, including the
+concurrent burst and the no-lease turn-taking), and `browser-two-phones.mjs`
+(two real browsers, two accounts, one game, including a phone scoring through a
+loss of signal and converging when it returns).
+
 ### D3 — League visibility is a column, not an assumption
 
 Phase 5 wants public spectator views, but making every row world-readable is a

@@ -228,6 +228,31 @@ const append = (who, clientEventId, kind, payload = {}) =>
   eq('and the log has every one of them', data.length, 12);
 }
 
+// NO LEASE. There is nothing to claim and nothing to release: a manager and a
+// scorer alternate on the same live game, neither one takes ownership of it,
+// and neither is ever asked to wait for the other. This is the decision phase
+// 3c records, checked against the database rather than asserted about it.
+{
+  const alternating = [];
+  for (let i = 0; i < 6; i++) {
+    const who = i % 2 === 0 ? manager : scorer;
+    // Awaited one at a time, so this is genuinely "the other phone goes next"
+    // rather than the burst above.
+    // eslint-disable-next-line no-await-in-loop
+    alternating.push(await append(who, `${stamp}-alt-${i}`, 'outcome', { o: { k: '1B' }, i }));
+  }
+  eq('a manager and a scorer take turns with no claim in between',
+    alternating.filter((r) => r.error).map((r) => r.error.message), []);
+  eq('and the log interleaves them in the order they arrived',
+    alternating.map((r) => Number(r.data[0].event_seq)), [13, 14, 15, 16, 17, 18]);
+
+  const { data } = await admin
+    .from('game_events').select('actor, seq').eq('game_id', gameId).gte('seq', 13).order('seq');
+  eq('each play still belongs to whoever entered it',
+    data.map((r) => (r.actor === manager.id ? 'M' : r.actor === scorer.id ? 'S' : '?')),
+    ['M', 'S', 'M', 'S', 'M', 'S']);
+}
+
 // =============================================================================
 console.log('\n--- who may append, and who may read ---------------------------');
 // =============================================================================
@@ -251,7 +276,7 @@ refused(
 {
   const asViewer = await viewer.client.from('game_events').select('seq').eq('game_id', gameId);
   eq('a viewer can read the log', asViewer.error, null);
-  eq('and sees every play', asViewer.data.length, 12);
+  eq('and sees every play', asViewer.data.length, 18);
 
   const asStranger = await stranger.client.from('game_events').select('seq').eq('game_id', gameId);
   eq('a stranger reading the log gets no error', asStranger.error, null);

@@ -259,6 +259,8 @@ eq('an empty log replays to nothing', replay(SEASON, []), null);
   eq('the unsent event is last', merged[2].clientEventId, a2.clientEventId);
 
   eq('with no backend the merge is simply the local order', mergeLog([], [a1, a2]).length, 2);
+  eq('the same event never folds twice, however it got into the list',
+    mergeLog([], [a2, a2]).length, 1);
   eq('with nothing local the merge is the server order', mergeLog([b1, a1], []).map((e) => e.seq), [1, 2]);
 }
 

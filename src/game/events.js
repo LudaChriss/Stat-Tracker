@@ -392,6 +392,15 @@ export function mergeLog(serverEvents, localEvents) {
   // looking unsent. An event that believes it has a sequence number but is
   // absent from the account is still a play that happened here, and dropping
   // it because of a flag would be exactly the silent loss this avoids.
-  const tail = (localEvents || []).filter((e) => !known.has(e.clientEventId));
+  const tail = [];
+  for (const e of localEvents || []) {
+    if (known.has(e.clientEventId)) continue;
+    // Defensive: an event id appears at most once in the fold. The local list
+    // is append-only with minted ids so it should not repeat, but folding a
+    // play twice would put a run on the board that nobody scored, and the
+    // check costs nothing.
+    known.add(e.clientEventId);
+    tail.push(e);
+  }
   return [...accepted, ...tail];
 }
