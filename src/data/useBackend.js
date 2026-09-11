@@ -177,8 +177,24 @@ export function useBackend() {
     }));
   }, [local, makeRemote]);
 
+  // Which account a reconciliation is already running for.
+  //
+  // On a first launch with a stored session, supabase-js answers twice: the
+  // explicit getSession resolves, and INITIAL_SESSION arrives through onChange.
+  // Both used to start a full reconciliation, and when the decision was
+  // "upload this device's season" that meant import_season_and_claim ran TWICE,
+  // milliseconds apart. Confirmed against a real database: two complete sets of
+  // opposing teams, after which the read-back check correctly reported that the
+  // uploaded season did not match the device, discarded it, and told the person
+  // their season could not be uploaded — for a season that was perfectly fine.
+  //
+  // Collapsing duplicates for the same account is safe: the second call carries
+  // the same user, so the work is identical. A different account, or the same
+  // one after this settles, still reconciles normally.
+  const reconcilingRef = useRef(null);
+
   /** Work out what to do, and do it when it is unambiguous. */
-  const reconcile = useCallback(
+  const reconcileOnce = useCallback(
     async (session) => {
       if (!session) {
         // Local data is never hidden behind this: App renders the season and
@@ -244,6 +260,21 @@ export function useBackend() {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [local, makeRemote, resolvePrimaryTeam, resolveRole],
+  );
+
+  /** One reconciliation per account at a time. See reconcilingRef above. */
+  const reconcile = useCallback(
+    async (session) => {
+      const who = session ? (session.user && session.user.id) || 'unknown' : 'signed-out';
+      if (reconcilingRef.current === who) return;
+      reconcilingRef.current = who;
+      try {
+        await reconcileOnce(session);
+      } finally {
+        reconcilingRef.current = null;
+      }
+    },
+    [reconcileOnce],
   );
 
   /** Send this device's season up, and only trust it once it reads back right. */

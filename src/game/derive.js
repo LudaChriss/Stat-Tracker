@@ -176,6 +176,18 @@ function deriveSchedule(s, actions) {
       sub: `${s.half === 'top' ? '▲ ' : '▼ '}${ordinal(s.inning)}`,
       onTap: actions.go('live'),
     });
+  } else if (s.joinable) {
+    // Somebody else is scoring right now. Offered, never taken automatically:
+    // landing someone in a game they did not open is how plays get entered
+    // against the wrong game.
+    cards.push({
+      key: 'join',
+      tag: '● LIVE',
+      tagColor: C.coral,
+      line: `${teamAbbrev(s.myTeam.name)} — being scored now`,
+      sub: 'Tap to join and score it too',
+      onTap: actions.joinLiveGame,
+    });
   } else if (opp) {
     cards.push({
       key: 'next',
@@ -722,6 +734,16 @@ export function deriveView(s, actions) {
     // The default tracking mode is unremarkable; only flag the limited one,
     // which keeps the header short enough for the extra control.
     trackLabel: s.trackMode === 'ours' ? ' · OUR TEAM ONLY' : '',
+
+    // Whether this game is being shared, and whether the sharing is working.
+    // Only said at all once the game has reached an account: a game scored on
+    // a phone with no backend is not "not syncing", it is simply local, and
+    // labelling it as a failure would be a lie.
+    shareLabel: !s.liveGameId
+      ? ''
+      : s.liveConnected
+        ? ' · SHARED'
+        : ` · SHARED (${s.gameLog.filter((e) => !s.serverLog.some((x) => x.clientEventId === e.clientEventId)).length} UNSENT)`,
     finalLine: `${s.myTeam.name} ${s.score.home} — ${opponentTeam(s).name} ${s.score.away}`,
     finalHeading: s.inning >= 7 ? 'End of the 7th — finalize game?' : 'Finalize game?',
 

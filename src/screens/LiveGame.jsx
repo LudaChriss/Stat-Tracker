@@ -50,6 +50,7 @@ function Scoreboard({ v, actions }) {
           />
           LIVE · {v.sportName}
           {v.trackLabel}
+          {v.shareLabel}
         </span>
         <span style={{ display: 'flex', gap: 6, flex: '0 0 auto', marginLeft: 8 }}>
           <button

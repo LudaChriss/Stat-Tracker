@@ -11,6 +11,16 @@ import { createReplayer, liveSlice, mergeLog, undoTarget } from './events.js';
 const TOAST_MS = 2600;
 const SYNC_MS = 3200;
 
+// How often to ask the account for plays we have not been told about. This is
+// the safety net under the realtime subscription, not the primary path — see
+// the effect that uses it.
+const LIVE_POLL_MS = 6000;
+
+// How often to check whether someone else has a game going, while this phone
+// is not in one. Rare on purpose: it is a question about the next few minutes,
+// not the next few seconds.
+const JOINABLE_POLL_MS = 15000;
+
 // The default when nothing is injected: this device's own storage. A
 // Supabase-backed repository is passed in once someone signs in — which is
 // the whole point of the abstraction, and why nothing below this line had to
@@ -299,14 +309,103 @@ export function useGame(injectedRepository) {
       setState((s) => {
         const mine = s.gameLog.find((e) => e.clientEventId === ack.clientEventId);
         if (!mine || ack.seq == null) return s;
-        if (s.serverLog.some((e) => e.clientEventId === ack.clientEventId)) return s;
-        const serverLog = [...s.serverLog, { ...mine, seq: ack.seq, id: ack.id }].sort(
+        // The first accepted play is also how this device learns which game in
+        // the account its log belongs to — which is what it then watches.
+        const withId = ack.gameId && !s.liveGameId ? { ...s, liveGameId: ack.gameId } : s;
+        if (withId.serverLog.some((e) => e.clientEventId === ack.clientEventId)) return withId;
+        const serverLog = [...withId.serverLog, { ...mine, seq: ack.seq, id: ack.id }].sort(
           (a, b) => a.seq - b.seq,
         );
-        return withLog(s, { serverLog });
+        return withLog(withId, { serverLog });
       });
     });
   }, [repository, withLog]);
+
+  /**
+   * Watch the game.
+   *
+   * Two mechanisms, on purpose. Realtime is what makes another phone's play
+   * appear in a second; the poll beside it is what makes it appear at all. A
+   * live socket over a mobile network drops messages and whole connections
+   * without reporting either, and a play that was genuinely written staying
+   * invisible for the rest of the game is not a failure mode worth accepting
+   * to save a request every few seconds.
+   *
+   * The poll asks only for what is newer than the highest sequence already
+   * held, so catching up after a tunnel costs one round trip.
+   */
+  useEffect(() => {
+    const gameId = state.liveGameId;
+    if (!gameId || !state.gameActive || !repository.fetchEvents) return undefined;
+
+    let stopped = false;
+    const catchUp = async () => {
+      const since = stateRef.current.serverLog.reduce((m, e) => Math.max(m, e.seq || 0), 0);
+      try {
+        const events = await repository.fetchEvents(gameId, since);
+        if (!stopped && events.length) acceptServerEvents(events);
+      } catch {
+        // No signal. The next poll tries again; nothing here is authoritative
+        // enough for a failure to be worth reporting.
+      }
+    };
+
+    catchUp();
+    const timer = setInterval(catchUp, LIVE_POLL_MS);
+
+    let unsubscribe = null;
+    if (repository.subscribeLive) {
+      unsubscribe = repository.subscribeLive(
+        gameId,
+        (event) => {
+          if (!stopped) acceptServerEvents([event]);
+        },
+        (status) => {
+          if (!stopped) patch({ liveConnected: status === 'SUBSCRIBED' });
+        },
+      );
+    }
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      if (unsubscribe) unsubscribe();
+    };
+  }, [state.liveGameId, state.gameActive, repository, acceptServerEvents, patch]);
+
+  /**
+   * Is somebody else already scoring a game for this team?
+   *
+   * Asked while this phone is NOT in a game, so it can offer to join rather
+   * than start a second one alongside it. Deliberately an offer and never an
+   * automatic switch: landing someone in a game they did not open is the kind
+   * of surprise that gets plays entered against the wrong game.
+   */
+  useEffect(() => {
+    if (!repository.findLiveGame) return undefined;
+    if (state.gameActive) {
+      if (state.joinable) patch({ joinable: null });
+      return undefined;
+    }
+
+    let stopped = false;
+    const look = async () => {
+      try {
+        const found = await repository.findLiveGame();
+        if (stopped) return;
+        setState((s) => (s.gameActive ? s : { ...s, joinable: found || null }));
+      } catch {
+        /* unreachable account: keep whatever was last known */
+      }
+    };
+    look();
+    const timer = setInterval(look, JOINABLE_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repository, state.gameActive]);
 
   const actions = useMemo(() => {
     const go = (screen) => () => patch({ screen, selRunner: null });
@@ -375,6 +474,53 @@ export function useGame(injectedRepository) {
             { gameLog: [event], serverLog: [] },
           ),
         );
+      },
+
+      /**
+       * Pick up a game someone else is already scoring.
+       *
+       * Nothing is merged and nothing local is kept: this device has no log
+       * for this game, so it takes the account's whole log and folds it. What
+       * it lands on is exactly what the other phone is looking at, because it
+       * is the same list of events in the same order.
+       */
+      joinLiveGame: async () => {
+        const found = stateRef.current.joinable;
+        if (!found || !repository.fetchEvents) return;
+
+        let events;
+        try {
+          events = await repository.fetchEvents(found.gameId, 0);
+        } catch {
+          toast('Could not reach that game — try again in a moment', 3200);
+          return;
+        }
+        if (!events.length) {
+          toast('That game has not been scored yet');
+          return;
+        }
+
+        setState((cur) =>
+          withLog(
+            {
+              ...cur,
+              screen: 'live',
+              liveTab: 'entry',
+              gameFinal: false,
+              gameClientId: found.clientId,
+              gameStartedAt: Date.parse(found.date) || Date.now(),
+              liveGameId: found.gameId,
+              liveConnected: false,
+              finalPrompted: false,
+              liveMismatch: null,
+              joinable: null,
+              bookOff: null,
+              selRunner: null,
+            },
+            { gameLog: [], serverLog: events },
+          ),
+        );
+        toast('Joined the game in progress', 3000);
       },
 
       // Scoring — each of these is one event, appended and sent.
