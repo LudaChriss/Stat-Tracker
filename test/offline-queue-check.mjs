@@ -263,5 +263,78 @@ const reset = () => { store = {}; mode = 'ok'; };
   eq('queue is usable again once storage recovers', stillWorks, true);
 }
 
+// --- a write made DURING a flush is not erased by it ---------------------------
+//
+// Handlers await the network. Live scoring appends a play every few seconds and
+// each append asks the queue to drain, so "something was enqueued while a flush
+// was in flight" is now the normal case rather than a corner.
+//
+// The bug this pins: a flush that wrote back the list it started with silently
+// erased anything added in the meantime. No error, no parked entry — the play
+// or the finished game was simply gone.
+{
+  reset();
+  const q = createOfflineQueue({ storageKey: 'q:concurrent' });
+  q.enqueue({ kind: 'slow', payload: 'first' });
+
+  let release;
+  const inFlight = new Promise((r) => { release = r; });
+  const seen = [];
+
+  const flushing = q.flush({
+    slow: async (p) => { seen.push(p); await inFlight; },
+  });
+
+  // The handler is awaiting. This is the play entered while the last one was
+  // still being sent.
+  await Promise.resolve();
+  q.enqueue({ kind: 'slow', payload: 'entered mid-flush' });
+
+  release();
+  await flushing;
+
+  eq('the entry being sent was applied', seen, ['first']);
+  eq('the one enqueued mid-flush survived', q.list().map((e) => e.payload), ['entered mid-flush']);
+  eq('and nothing was parked', q.parked().length, 0);
+}
+
+// --- two flushes at once do not fight over the list ----------------------------
+{
+  reset();
+  const q = createOfflineQueue({ storageKey: 'q:overlap' });
+  q.enqueue({ kind: 'a', payload: 1 });
+  q.enqueue({ kind: 'a', payload: 2 });
+
+  const applied = [];
+  const handlers = { a: async (p) => { await new Promise((r) => setTimeout(r, 5)); applied.push(p); } };
+
+  const [one, two] = await Promise.all([q.flush(handlers), q.flush(handlers)]);
+
+  eq('every entry was applied exactly once', applied.sort(), [1, 2]);
+  eq('the queue is empty afterwards', q.list(), []);
+  eq('the first flush reported what it applied', one.applied.length + two.applied.length, 2);
+}
+
+// --- a failure during an overlapping flush still blocks, and keeps its place ----
+{
+  reset();
+  const q = createOfflineQueue({ storageKey: 'q:overlap-fail' });
+  q.enqueue({ kind: 'a', payload: 'blocked' });
+  q.enqueue({ kind: 'a', payload: 'behind it' });
+
+  const handlers = {
+    a: async (p) => {
+      await new Promise((r) => setTimeout(r, 5));
+      if (p === 'blocked') throw new Error('network unreachable');
+    },
+  };
+
+  await Promise.all([q.flush(handlers), q.flush(handlers)]);
+
+  eq('the blocked entry is still pending', q.list().map((e) => e.payload), ['blocked', 'behind it']);
+  eq('and the one behind it never ran ahead', q.list()[0].payload, 'blocked');
+  eq('nothing was parked for a network error', q.parked().length, 0);
+}
+
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

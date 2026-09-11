@@ -319,7 +319,14 @@ export function rowsToSeason(rows, defaults = {}) {
     linesByGame.get(gl.game_id).push(gl);
   });
 
-  const history = games.map((g) => {
+  // History is finished games only. Since slice 3a a games row exists from the
+  // first pitch, so an unfiltered map would file a game that is still being
+  // played -- and one that was cancelled -- as a completed 0-0 result and move
+  // the standings with it. A row with no status at all is treated as final:
+  // that is every row written before this column mattered.
+  const finished = games.filter((g) => !g.status || g.status === 'final');
+
+  const history = finished.map((g) => {
     const home = myTeamId != null && g.home_team_id === myTeamId;
     const opponent = home ? g.away_team_name_snapshot : g.home_team_name_snapshot;
     const score = home ? { us: g.home_score, them: g.away_score } : { us: g.away_score, them: g.home_score };

@@ -409,6 +409,29 @@ export function applyRunnerAction(s, adv) {
   return { ...s, ...patch };
 }
 
+/**
+ * End the opponent's half early — the "they're done batting" button.
+ *
+ * Lifted out of useGame unchanged so that replaying an event log and tapping
+ * the button go through one implementation rather than two that can drift.
+ */
+export function applyEndHalf(s) {
+  return {
+    ...s,
+    outs: 0,
+    bases: [null, null, null],
+    half: 'bot',
+    selRunner: null,
+    lastPlay: { k: '/', detail: `Side over — ${s.myTeam.name} up` },
+    tape: [...s.tape, '/'].slice(-9),
+  };
+}
+
+/** Take a run back off the opponent's total. Same lift, same reason. */
+export function applyQuickRunMinus(s) {
+  return s.score.away > 0 ? { ...s, score: { ...s.score, away: s.score.away - 1 } } : s;
+}
+
 export function applyUndo(s) {
   if (!s.undoStack.length) return s;
   const prev = s.undoStack[s.undoStack.length - 1];
@@ -438,7 +461,14 @@ export function seasonLine(history, pid) {
  * rename, a removal — can never rewrite what happened in a past game. The
  * record carries full per-player lines, so it doubles as the box score.
  */
-export function buildGameRecord(s, { date = new Date() } = {}) {
+export function buildGameRecord(s, options = {}) {
+  // A game that ran through the event log already has an id and a start time,
+  // minted when the first pitch was scored. The finished record must carry the
+  // SAME id: it is what save_game is idempotent on, and what reconciles the
+  // box score with the live row the log was hanging off. A game from before
+  // the log existed still falls back to "now", exactly as it used to.
+  const date =
+    options.date || (s.gameStartedAt ? new Date(s.gameStartedAt) : new Date());
   const homeLines = s.lineup.map((id) => {
     const p = playerById(s, id);
     const pid = homePid(p.id);
@@ -454,7 +484,7 @@ export function buildGameRecord(s, { date = new Date() } = {}) {
   const them = s.score.away;
 
   return {
-    id: `g-${date.getTime()}`,
+    id: s.gameClientId || `g-${date.getTime()}`,
     date: date.toISOString().slice(0, 10),
     label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     opponentId: s.opponentId,

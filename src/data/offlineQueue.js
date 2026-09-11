@@ -268,14 +268,14 @@ export function createOfflineQueue({
    * @param {object} [options]
    * @param {string} [options.owner]  only apply entries queued for this user
    */
-  async function flush(handlers = {}, { owner = null } = {}) {
+  async function runFlush(handlers = {}, { owner = null } = {}) {
     const state = read();
     const all = state.pending.slice().sort((a, b) => a.seq - b.seq);
     // Another account's writes are not skipped in the sense of being lost —
     // they stay exactly where they are, in order, waiting for that account.
     const ordered = all.filter((e) => sameOwner(e.owner, owner));
     const held = all.filter((e) => !sameOwner(e.owner, owner));
-    const parkedList = state.parked.slice();
+    const newlyParked = [];
     const stillPending = [];
     const applied = [];
     let failed = null;
@@ -302,7 +302,7 @@ export function createOfflineQueue({
       } catch (err) {
         const classification = classify(err);
         if (classification === 'permanent') {
-          parkedList.push({
+          newlyParked.push({
             ...entry,
             status: 'parked',
             error: serializeError(err),
@@ -320,9 +320,49 @@ export function createOfflineQueue({
       }
     }
 
-    write({ seq: state.seq, pending: [...stillPending, ...held].sort((a, b) => a.seq - b.seq), parked: parkedList });
+    // Write against a FRESH read, not the snapshot this flush started from.
+    //
+    // Handlers await the network, and during that wait the app can enqueue.
+    // Writing back the snapshot plus our edits would erase whatever was added
+    // in between — a play, or a finalized game — with no error anywhere. That
+    // is the one failure this queue exists to make impossible, so the result
+    // is expressed as a set of changes applied to whatever is there now:
+    // remove what succeeded, remove what was parked, replace what we retried,
+    // and leave everything else exactly as we found it.
+    const fresh = read();
+    const appliedIds = new Set(applied);
+    const parkedIds = new Set(newlyParked.map((e) => e.id));
+    const touched = new Map(stillPending.map((e) => [e.id, e]));
+
+    const pending = fresh.pending
+      .filter((e) => !appliedIds.has(e.id) && !parkedIds.has(e.id))
+      .map((e) => touched.get(e.id) || e)
+      .sort((a, b) => a.seq - b.seq);
+
+    write({ seq: fresh.seq, pending, parked: [...fresh.parked, ...newlyParked] });
 
     return { applied, failed, remaining: stillPending.length, heldForOtherAccounts: held.length };
+  }
+
+  // One flush at a time.
+  //
+  // A play is appended every few seconds and each append asks the queue to
+  // drain, so overlapping flushes stopped being a theoretical concern the
+  // moment live scoring existed: two of them read the same pending list, both
+  // send it, and the second one's write-back resurrects or erases whatever the
+  // first decided. Calls are therefore queued behind each other rather than
+  // run together — a later one sees what the earlier one did.
+  let chain = Promise.resolve();
+  function flush(handlers = {}, options = {}) {
+    const next = chain.then(
+      () => runFlush(handlers, options),
+      () => runFlush(handlers, options),
+    );
+    chain = next.then(
+      () => {},
+      () => {},
+    );
+    return next;
   }
 
   /** Called after any change, so the UI can show a parked write without polling. */

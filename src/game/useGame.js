@@ -1,18 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_STATE, PLAYER_COLORS } from '../data/league.js';
-import { nextId, slugId } from '../data/ids.js';
+import { newEventId, nextId, slugId } from '../data/ids.js';
 import { createLocalRepository } from '../data/localRepository.js';
 import { saveSeasonFile } from './export.js';
 import { applySeason, parseSeasonFile } from './importSeason.js';
 import { requestPersistence } from './storage.js';
-import {
-  buildGameRecord,
-  applyMoveLineup,
-  applyOutcome,
-  applyQuick,
-  applyRunnerAction,
-  applyUndo,
-} from './logic.js';
+import { buildGameRecord, applyMoveLineup, opponentTeam } from './logic.js';
+import { createReplayer, liveSlice, mergeLog, undoTarget } from './events.js';
 
 const TOAST_MS = 2600;
 const SYNC_MS = 3200;
@@ -129,6 +123,191 @@ export function useGame(injectedRepository) {
     syncTimer.current = setTimeout(() => patch({ synced: true }), SYNC_MS);
   }, [patch]);
 
+  // ---- The live event log --------------------------------------------------
+  //
+  // Live game state is no longer mutated in place. Every play is appended to a
+  // log and the state is folded back out of it, which is what lets a second
+  // phone's play land in the middle of yours without anything being lost.
+  //
+  // Two lists, deliberately kept apart:
+  //
+  //   gameLog     what THIS device entered, in the order it entered it
+  //   serverLog   what the account accepted, in the order IT assigned
+  //
+  // `mergeLog` puts the accepted ones first, in server order, and this
+  // device's not-yet-accepted ones after, in its own order. With no backend at
+  // all the server list stays empty and the fold is simply the local order,
+  // which is how a game scored on a phone with no account still works.
+  const foldRef = useRef(null);
+  if (!foldRef.current) foldRef.current = createReplayer();
+
+  /** Re-derive the live slice of state from the log. */
+  const withLog = useCallback((s, next) => {
+    const gameLog = next.gameLog === undefined ? s.gameLog : next.gameLog;
+    const serverLog = next.serverLog === undefined ? s.serverLog : next.serverLog;
+    const derived = foldRef.current(s, mergeLog(serverLog, gameLog));
+    if (!derived) return { ...s, gameLog, serverLog };
+
+    const out = { ...s, ...liveSlice(derived), gameLog, serverLog };
+    // A selected runner is this phone's UI, but it points at a base. If the
+    // bases moved — by our own play or by someone else's — the selection now
+    // means something different from what was tapped, so drop it.
+    if (s.selRunner != null && String(s.bases) !== String(out.bases)) out.selRunner = null;
+    // The end of the 7th asks whether the game is over. Ask once: replaying
+    // the log recomputes that flag every time, and a sheet that reopens after
+    // being dismissed is worse than no prompt.
+    if (derived.confirmFinal && !s.finalPrompted) {
+      out.confirmFinal = true;
+      out.finalPrompted = true;
+    }
+    return out;
+  }, []);
+
+  /** What the backend needs to know about this game to hold its log. */
+  const describeGame = useCallback((s) => {
+    if (!s.gameClientId) return null;
+    const when = s.gameStartedAt ? new Date(s.gameStartedAt) : new Date();
+    return {
+      clientId: s.gameClientId,
+      opponentId: s.opponentId,
+      opponent: opponentTeam(s).name,
+      sport: s.sport,
+      home: true,
+      label: when.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      date: when.toISOString(),
+    };
+  }, []);
+
+  /**
+   * Record one thing that happened. Appends locally and nothing else — the
+   * sending is one effect below, so there is a single answer to "has this
+   * reached the account", whether it was entered a second ago or three innings
+   * ago on a phone with no signal.
+   */
+  const emit = useCallback(
+    (kind, payload) => {
+      const event = {
+        clientEventId: newEventId(),
+        kind,
+        payload: payload || {},
+        seq: null,
+        at: Date.now(),
+      };
+      setState((s) => withLog(s, { gameLog: [...s.gameLog, event] }));
+      return event;
+    },
+    [withLog],
+  );
+
+  /**
+   * Fold events the account has accepted into the authoritative list.
+   *
+   * Matched on the entering device's own event id, so a play of ours coming
+   * back — over realtime, from a poll, or as the answer to the write that sent
+   * it — is recognised as the same fact rather than counted twice.
+   */
+  const acceptServerEvents = useCallback(
+    (incoming) => {
+      if (!incoming || !incoming.length) return;
+      setState((s) => {
+        const byKey = new Map(
+          s.serverLog.map((e) => [e.clientEventId || `id:${e.id}`, e]),
+        );
+        let changed = false;
+        for (const e of incoming) {
+          const key = e.clientEventId || `id:${e.id}`;
+          if (byKey.has(key)) continue;
+          byKey.set(key, e);
+          changed = true;
+        }
+        if (!changed) return s;
+        const serverLog = [...byKey.values()].sort((a, b) => a.seq - b.seq);
+        return withLog(s, { serverLog });
+      });
+    },
+    [withLog],
+  );
+
+  /**
+   * A game that was already being played when a log became possible.
+   *
+   * Three ways to get here, all of them real: a game in progress on a build
+   * from before any of this existed; a game restored from a save made
+   * mid-innings; a game started while signed out. In each case the plays so
+   * far are not in any log, and without this the phone would sit on a live
+   * game that no longer responds to a tap.
+   *
+   * The answer is one `resume` event carrying the game exactly as it stands.
+   * It is the first thing in the log, so nothing already scored is lost and a
+   * second phone joining replays the whole game rather than the rest of it.
+   */
+  useEffect(() => {
+    if (!hydrated) return;
+    const s = stateRef.current;
+    if (!s.gameActive || (s.gameLog && s.gameLog.length)) return;
+
+    const startedAt = s.gameStartedAt || Date.now();
+    const clientId = s.gameClientId || `g-${startedAt}`;
+    const event = {
+      clientEventId: newEventId(),
+      kind: 'resume',
+      seq: null,
+      at: startedAt,
+      payload: { gameClientId: clientId, state: { ...liveSlice(s), gameClientId: clientId, undoStack: [] } },
+    };
+    setState((cur) =>
+      withLog(
+        { ...cur, gameClientId: clientId, gameStartedAt: startedAt },
+        { gameLog: [event], serverLog: cur.serverLog || [] },
+      ),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]);
+
+  /**
+   * Send everything in the log that the account has not got.
+   *
+   * One place, deliberately. A play entered a second ago and a play entered
+   * three innings ago on a phone with no signal are the same problem, and so
+   * is a game that was being scored before anyone signed in. They all reach
+   * the account by this route, in the order they were entered, through the
+   * same durable queue as every other write — with no coalesce key, because
+   * two plays are two facts and the later one must never stand in for the
+   * earlier one.
+   */
+  useEffect(() => {
+    if (!repository.appendEvent || !state.gameActive || !state.gameLog.length) return;
+    const descriptor = describeGame(state);
+    if (!descriptor) return;
+
+    const accounted = new Set(state.serverLog.map((e) => e.clientEventId));
+    if (repository.queuedEventIds) {
+      for (const id of repository.queuedEventIds()) accounted.add(id);
+    }
+    for (const event of state.gameLog) {
+      if (accounted.has(event.clientEventId)) continue;
+      repository.appendEvent(descriptor, event);
+    }
+  }, [repository, state, describeGame]);
+
+  // A play of ours is accepted: the server has told us where it sits. Move it
+  // out of the local tail and into the authoritative list at that position,
+  // without waiting for realtime to echo it back.
+  useEffect(() => {
+    if (!repository.onEventAck) return undefined;
+    return repository.onEventAck((ack) => {
+      setState((s) => {
+        const mine = s.gameLog.find((e) => e.clientEventId === ack.clientEventId);
+        if (!mine || ack.seq == null) return s;
+        if (s.serverLog.some((e) => e.clientEventId === ack.clientEventId)) return s;
+        const serverLog = [...s.serverLog, { ...mine, seq: ack.seq, id: ack.id }].sort(
+          (a, b) => a.seq - b.seq,
+        );
+        return withLog(s, { serverLog });
+      });
+    });
+  }, [repository, withLog]);
+
   const actions = useMemo(() => {
     const go = (screen) => () => patch({ screen, selRunner: null });
 
@@ -146,71 +325,132 @@ export function useGame(injectedRepository) {
       openOpponentPicker: () => patch({ opponentPicker: true }),
       closeOpponentPicker: () => patch({ opponentPicker: false }),
       setTrackMode: (trackMode) => () => patch({ trackMode }),
-      startGame: () =>
-        patch({
-          screen: 'live',
-          liveTab: 'lineup',
-          gameActive: true,
-          gameFinal: false,
-          half: 'top',
-          inning: 1,
-          outs: 0,
-          bases: [null, null, null],
-          score: { home: 0, away: 0 },
-          kiHome: 0,
-          kiAway: 0,
-          undoStack: [],
-          lastPlay: null,
-          tape: [],
-          gameStats: {},
-          events: [],
-          bookOff: null,
-        }),
+      /**
+       * Start a game. The first event in the log, and the only one that says
+       * what the game IS — which sport, which opponent, which batting order,
+       * whether the opposition is being tracked. A second phone that never saw
+       * this screen replays from here and lands on the same starting point.
+       *
+       * The game's id is minted now rather than at finalisation, because the
+       * log needs something to hang off from the first pitch. It is the same
+       * id the finished record carries, which is what lets the box score be
+       * reconciled against the log it came from.
+       */
+      startGame: () => {
+        const startedAt = Date.now();
+        const clientId = `g-${startedAt}`;
+        const s = stateRef.current;
+        const event = {
+          clientEventId: newEventId(),
+          kind: 'start',
+          seq: null,
+          at: startedAt,
+          payload: {
+            gameClientId: clientId,
+            sport: s.sport,
+            opponentId: s.opponentId,
+            trackMode: s.trackMode,
+            lineup: s.lineup,
+            bench: s.bench,
+          },
+        };
 
-      // Scoring
-      record: (o) => setState((s) => applyOutcome(s, o)),
-      quick: (isRun) => setState((s) => applyQuick(s, isRun)),
-      quickRunMinus: () =>
-        setState((s) =>
-          s.score.away > 0 ? { ...s, score: { ...s.score, away: s.score.away - 1 } } : s,
-        ),
-      endTheirHalf: () =>
-        setState((s) => ({
-          ...s,
-          outs: 0,
-          bases: [null, null, null],
-          half: 'bot',
-          selRunner: null,
-          lastPlay: { k: '/', detail: `Side over — ${s.myTeam.name} up` },
-          tape: [...s.tape, '/'].slice(-9),
-        })),
-      undo: () => setState(applyUndo),
+        setState((cur) =>
+          withLog(
+            {
+              ...cur,
+              screen: 'live',
+              liveTab: 'lineup',
+              gameFinal: false,
+              gameClientId: clientId,
+              gameStartedAt: startedAt,
+              liveGameId: null,
+              liveConnected: false,
+              finalPrompted: false,
+              liveMismatch: null,
+              joinable: null,
+              bookOff: null,
+              selRunner: null,
+            },
+            { gameLog: [event], serverLog: [] },
+          ),
+        );
+      },
+
+      // Scoring — each of these is one event, appended and sent.
+      record: (o) => emit('outcome', { o }),
+      quick: (isRun) => emit('quick', { run: !!isRun }),
+      quickRunMinus: () => emit('quick_run_minus', {}),
+      endTheirHalf: () => emit('end_half', {}),
+
+      /**
+       * Take back the last play — whoever entered it.
+       *
+       * An undo is an append, not a deletion: the log keeps the play and the
+       * taking-back of it, so every phone replaying reaches the same state and
+       * nothing is ever removed from the record.
+       *
+       * It names the play it is taking back, which matters with two scorers:
+       * both tapping undo on the same strikeout takes back that strikeout
+       * once, rather than that strikeout and then the double before it.
+       */
+      undo: () => {
+        const s = stateRef.current;
+        const target = undoTarget(mergeLog(s.serverLog, s.gameLog));
+        if (!target) return;
+        emit('undo', { target: target.clientEventId });
+      },
 
       // Base runners
       selectRunner: (i) =>
         setState((s) => (s.bases[i] ? { ...s, selRunner: s.selRunner === i ? null : i } : s)),
-      runnerAction: (adv) => () => setState((s) => applyRunnerAction(s, adv)),
+      // Which runner is selected is this phone's business; where the runner
+      // ends up is everybody's, so the event names the base rather than
+      // relying on a selection the other phone cannot see.
+      runnerAction: (adv) => () => {
+        const base = stateRef.current.selRunner;
+        if (base == null || !stateRef.current.bases[base]) return;
+        emit('runner', { base, action: adv === 'back' ? 'back' : adv ? 'adv' : 'out' });
+        patch({ selRunner: null });
+      },
       clearSel: () => patch({ selRunner: null }),
 
       // Live tabs
       setLiveTab: (liveTab) => () => patch({ liveTab }),
       setStatsTeam: (statsTeam) => () => patch({ statsTeam }),
+      // Whether the opposition gets scorebook entries is a fact about the
+      // game, not a preference on this phone: flip it here and the other
+      // scorer's book has to start filling in too.
       trackBothNow: () => {
-        patch({ trackMode: 'both' });
+        if (stateRef.current.gameActive) emit('track_mode', { mode: 'both' });
+        else patch({ trackMode: 'both' });
         toast('Now tracking both teams');
       },
 
       // Scorebook paging
       setBookOff: (bookOff) => () => patch({ bookOff }),
 
-      // Lineup
-      moveLineup: (idx, dir) => () => setState((s) => applyMoveLineup(s, idx, dir)),
-      addFromBench: (id) => () =>
+      // Lineup.
+      //
+      // Outside a game this is season editing and stays local. During a game
+      // the batting order decides who is up next, so a change to it has to
+      // reach the other phone or the two would disagree about whose turn it
+      // is — and then disagree about whose stat line a play belongs to.
+      moveLineup: (idx, dir) => () => {
+        if (stateRef.current.gameActive) emit('lineup_move', { idx, dir });
+        else setState((s) => applyMoveLineup(s, idx, dir));
+      },
+      addFromBench: (id) => () => {
+        if (stateRef.current.gameActive) {
+          emit('lineup_add', { id });
+          return;
+        }
         setState((s) => ({
           ...s,
           lineup: [...s.lineup, id],
           bench: s.bench.filter((b) => b !== id),
-        })),
+        }));
+      },
       openPosMenu: (id) => () => patch({ posMenu: id }),
       closePosMenu: () => patch({ posMenu: null }),
       setPos: (pos) => () =>
@@ -254,6 +494,14 @@ export function useGame(injectedRepository) {
           posMenu: null,
           confirmFinal: false,
           confirmCancelGame: false,
+          gameClientId: null,
+          gameStartedAt: null,
+          gameLog: [],
+          serverLog: [],
+          liveGameId: null,
+          liveConnected: false,
+          finalPrompted: false,
+          liveMismatch: null,
         })),
 
       // Finalizing
@@ -272,6 +520,16 @@ export function useGame(injectedRepository) {
           screen: 'league',
           liveTab: 'entry',
           synced: false,
+          // The log belongs to the game that just ended. It has been sent (or
+          // is queued); the device keeps the finished record, not the plays.
+          gameLog: [],
+          serverLog: [],
+          gameClientId: null,
+          gameStartedAt: null,
+          liveGameId: null,
+          liveConnected: false,
+          finalPrompted: false,
+          liveMismatch: null,
         }));
         // Push the finished game on its own, separately from the debounced
         // season snapshot: a game is an append and must not be coalesced away.
@@ -379,7 +637,12 @@ export function useGame(injectedRepository) {
         }),
 
       // Move a player between the batting order and the bench.
-      benchPlayer: (id) => () =>
+      benchPlayer: (id) => () => {
+        if (stateRef.current.gameActive) {
+          emit('lineup_bench', { id });
+          patch({ posMenu: null });
+          return;
+        }
         setState((s) => {
           // Never empty the order completely — there would be nobody to bat.
           if (s.lineup.length <= 1 || !s.lineup.includes(id)) return { ...s, posMenu: null };
@@ -389,7 +652,8 @@ export function useGame(injectedRepository) {
             bench: s.bench.includes(id) ? s.bench : [...s.bench, id],
             posMenu: null,
           };
-        }),
+        });
+      },
 
       openTeamEditor: (id) => () => patch({ teamEditor: { id } }),
       closeTeamEditor: () => patch({ teamEditor: null }),
@@ -592,6 +856,15 @@ export function useGame(injectedRepository) {
           kiAway: 0,
           gameActive: false,
           gameFinal: false,
+          gameClientId: null,
+          gameStartedAt: null,
+          gameLog: [],
+          serverLog: [],
+          liveGameId: null,
+          liveConnected: false,
+          finalPrompted: false,
+          liveMismatch: null,
+          joinable: null,
           resetFlow: null,
           playerEditor: null,
           teamEditor: null,
@@ -622,7 +895,7 @@ export function useGame(injectedRepository) {
       openPlayer: (playerId, playerFrom) => () => patch({ screen: 'player', playerId, playerFrom }),
       toggleStatSet: () => setState((s) => ({ ...s, statSet: (s.statSet + 1) % 2 })),
     };
-  }, [patch, toast, markUnsynced]);
+  }, [patch, toast, markUnsynced, emit, withLog, describeGame, repository]);
 
   return { state, actions };
 }

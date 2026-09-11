@@ -107,6 +107,19 @@ export const INITIAL_STATE = {
   posOverride: {},
   gameStats: {},
   events: [],
+  // ---- The live event log (phase 3) --------------------------------------
+  // `gameLog` is what this device entered, in the order it entered it.
+  // `serverLog` is what the account has accepted, in the order it assigned.
+  // Live state is the two folded together — see game/events.js.
+  gameClientId: null,
+  gameStartedAt: null,
+  gameLog: [],
+  serverLog: [],
+  liveGameId: null,
+  liveConnected: false,
+  finalPrompted: false,
+  liveMismatch: null,
+  joinable: null,
   bookOff: null,
   posMenu: null,
   opponentPicker: false,

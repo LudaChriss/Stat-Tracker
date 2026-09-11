@@ -21,6 +21,7 @@ import { rowsToSeason, seasonToRows } from './seasonMapping.js';
 import { createOfflineQueue } from './offlineQueue.js';
 import { verifyGame } from './seasonSync.js';
 import { planBackfill } from './backfill.js';
+import { createLiveGames } from './liveGames.js';
 
 const SAVE_DEBOUNCE_MS = 1200;
 
@@ -128,6 +129,11 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
   // lose the edit. The queue replays in order when the connection returns.
   const writes = queue || createOfflineQueue();
 
+  const live = createLiveGames(client, { getTeamId });
+  // Who to tell when the account accepts a play, so the device can record the
+  // sequence number the server gave it.
+  const ackListeners = new Set();
+
   const handlers = {
     season: async (payload) => {
       await writeSeason(payload);
@@ -136,6 +142,18 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
     // coalesceKey so a later season save can never supersede it.
     game: async (record) => {
       await writeGame(record);
+    },
+    // One play. Never coalesced either, and for a stronger reason than a game:
+    // two events of the same kind are two different things that happened.
+    event: async (payload) => {
+      const ack = await live.appendNow(payload);
+      ackListeners.forEach((fn) => {
+        try {
+          fn(ack);
+        } catch {
+          /* a broken listener does not break the queue */
+        }
+      });
     },
   };
 
@@ -225,7 +243,9 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
 
   async function writeSeason(state) {
     const teamId = getTeamId();
-    if (!teamId) return;
+    // Same reasoning as writeGame: not knowing the team yet is a reason to
+    // wait, not a reason for the queue to consider this done.
+    if (!teamId) throw new Error('this device does not know which team to write to yet');
 
     // One call, one transaction. Doing this as separate statements left the
     // team renamed but the roster stale when the second one failed.
@@ -247,7 +267,10 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
    */
   async function writeGame(record) {
     const teamId = getTeamId();
-    if (!teamId) return;
+    // Returning quietly here marked the entry applied and dropped it: the
+    // queue cannot tell "did nothing" from "done". A game must wait for a team
+    // to write it to, not disappear because the answer was not ready yet.
+    if (!teamId) throw new Error('this device does not know which team to write to yet');
 
     const { error } = await client.rpc('save_game', { p_team_id: teamId, payload: record });
     if (error) throw error;
@@ -296,6 +319,62 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
       writes.enqueue({ kind: 'game', payload: record, owner: owner() });
       flushQueue().catch(() => {});
     },
+
+    // ---- Live shared scoring (phase 3) -----------------------------------
+    //
+    // A play goes through the SAME durable, strictly-ordered queue as
+    // everything else, with no coalesce key. That is what makes a phone that
+    // loses signal in the 3rd replay its own innings in its own order when the
+    // signal comes back, rather than sending only the last thing that happened.
+
+    /** Record one play. Fire-and-forget, like finalising a game. */
+    appendEvent(game, event) {
+      if (!game || !game.clientId || !event || !event.clientEventId) return;
+      writes.enqueue({ kind: 'event', payload: { game, event }, owner: owner() });
+      flushQueue().catch(() => {});
+    },
+
+    /**
+     * Event ids the queue is already carrying, pending or parked.
+     *
+     * The sender asks before it enqueues, so a reload mid-game does not queue
+     * every play a second time. The append is idempotent either way; this only
+     * stops the queue filling up with writes that would be no-ops.
+     */
+    queuedEventIds() {
+      const ids = new Set();
+      for (const e of [...writes.list(), ...writes.parked()]) {
+        if (e.kind !== 'event') continue;
+        const id = e.payload && e.payload.event && e.payload.event.clientEventId;
+        if (id) ids.add(id);
+      }
+      return ids;
+    },
+
+    /** Called with { clientEventId, seq, gameId } each time a play is accepted. */
+    onEventAck(fn) {
+      if (typeof fn !== 'function') return () => {};
+      ackListeners.add(fn);
+      return () => ackListeners.delete(fn);
+    },
+
+    /** The account's log for a game, in the order the server put it in. */
+    fetchEvents: (gameId, sinceSeq) => live.fetchEvents(gameId, sinceSeq),
+
+    /** A game still in progress that this account can see. */
+    findLiveGame: () => live.findLiveGame(getTeamId()),
+
+    /** Resolve (or create) the backend game a client-side game id maps to. */
+    ensureLiveGame: (descriptor) => live.ensureGame(descriptor),
+
+    /** The backend id for a client-side game id, if this device knows it. */
+    liveGameId: (clientId) => live.knownId(clientId),
+
+    /** Watch for plays entered anywhere. Returns an unsubscribe function. */
+    subscribeLive: (gameId, onEvent, onStatus) => live.subscribe(gameId, onEvent, onStatus),
+
+    /** Mark a live game abandoned. The log is kept; the tombstone is the point. */
+    cancelLiveGame: (gameId) => live.cancelGame(gameId),
 
     /** Which games this device has confirmed are in the account. */
     syncedGames: () => readSyncedGames(),

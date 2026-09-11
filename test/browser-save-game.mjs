@@ -250,6 +250,17 @@ ok('the game in progress survived sign-in and the backend load', !!liveVisible,
 need('a live game to finalize', !!liveVisible);
 eq('and it is on the live screen', liveVisible.screen, 'live');
 
+// Since phase 3a the game reaches the account while it is still being played:
+// a `live` row appears as soon as the first event goes up, and finalising
+// UPDATES that row rather than adding one. Wait for it, so what follows
+// measures from a settled state rather than racing the first append.
+const liveRow = await until('the game in progress to reach the account', async () => {
+  const rows = await gamesFor(teamId);
+  return rows.find((g) => g.status === 'live') || null;
+}, 25000);
+ok('the game in progress reached the account before it was finished', !!liveRow,
+  'no live game row — the event log did not leave the device');
+
 const before = await gamesFor(teamId);
 // Identify the new record by what was NOT there before, rather than by a count:
 // the account's history is whatever migrated up, which is not the harness's to
@@ -267,9 +278,11 @@ const finalized = await until('the record to be written locally', async () => {
 ok('the game was recorded on the device', !!finalized);
 need('a finalized record to look for', !!finalized);
 
+// Wait for the FINISHED row. A row with this client id already exists — the
+// live one — so "a row appeared" is no longer evidence that save_game ran.
 const row = await until('the game to reach the backend', async () => {
   const rows = await gamesFor(teamId);
-  return rows.find((g) => g.client_id === finalized.id) || null;
+  return rows.find((g) => g.client_id === finalized.id && g.status === 'final') || null;
 }, 20000);
 if (!row) {
   const q = JSON.parse((await get('score-tracker:queue')) || '{}');
@@ -284,7 +297,10 @@ if (!row) {
 ok('finalizing wrote the game to the backend', !!row, 'no row with client_id ' + finalized.id);
 need('a game row to inspect', !!row);
 
-eq('exactly one game was added', (await gamesFor(teamId)).length, before.length + 1);
+eq('finalising added no second game', (await gamesFor(teamId)).length, before.length);
+eq('it finished the very row that was live', row.id, liveRow ? liveRow.id : null);
+eq('the game has exactly one row',
+  (await gamesFor(teamId)).filter((g) => g.client_id === finalized.id).length, 1);
 eq('it is final, not in progress', row.status, 'final');
 
 // The row is from the home team's point of view; the device is from ours.
@@ -344,6 +360,13 @@ const liveAgain = await settled();
 ok('a second game can be started after the first was finalized', !!liveAgain);
 need('a second live game', !!liveAgain);
 const idsBeforeOffline = new Set((liveAgain.history || []).map((g) => g.id));
+// Same again: wait for the second game's live row before measuring, so the
+// count below is about what FINALISING did, not about when the first append
+// happened to land.
+await until('the second game to reach the account', async () => {
+  const rows = await gamesFor(teamId);
+  return rows.find((g) => g.status === 'live') || null;
+}, 25000);
 const beforeOffline = (await gamesFor(teamId)).length;
 
 await setOffline(true);
@@ -368,7 +391,9 @@ await js(`window.dispatchEvent(new Event('online')), 1`);
 
 const offlineRow = await until('the queued game to land', async () => {
   const rows = await gamesFor(teamId);
-  return offlineRecord ? rows.find((g) => g.client_id === offlineRecord.id) || null : null;
+  return offlineRecord
+    ? rows.find((g) => g.client_id === offlineRecord.id && g.status === 'final') || null
+    : null;
 }, 25000);
 ok('coming back online delivers the game that was finalized offline', !!offlineRow);
 if (offlineRow) {
@@ -379,7 +404,11 @@ if (offlineRow) {
   ok('and it verified on read-back too', !!syncedB, 'never marked synced');
   ok('the earlier game was not disturbed', !!syncedB && syncedB.includes(finalized.id),
     'syncedGames: ' + JSON.stringify(syncedB));
-  eq('both games are in the account', (await gamesFor(teamId)).length, beforeOffline + 1);
+  // The row was already there — the game reached the account when it started.
+  // What the reconnection did was finish it, not create it.
+  eq('both games are in the account, and no third one', (await gamesFor(teamId)).length, beforeOffline);
+  eq('the second game has exactly one row',
+    (await gamesFor(teamId)).filter((g) => g.client_id === offlineRecord.id).length, 1);
 }
 
 const queueB = await until('the queue to drain', async () => {
@@ -420,6 +449,13 @@ const liveThird = await settled();
 ok('a third game can be started', !!liveThird);
 need('a third live game', !!liveThird);
 const idsBeforeBlocked = new Set((liveThird.history || []).map((g) => g.id));
+// Only save_game is blocked, so the event log still reaches the account and
+// the third game's live row appears. Wait for it before measuring, or the
+// count below would be timing the append rather than the finalise.
+await until('the third game to reach the account', async () => {
+  const rows = await gamesFor(teamId);
+  return rows.find((g) => g.status === 'live') || null;
+}, 25000);
 const countBeforeBlocked = (await gamesFor(teamId)).length;
 
 eq('tapped Game completed (write blocked)', await clickText('Game completed'), 'OK');
@@ -463,7 +499,11 @@ if (survived) {
 const stillQueued = JSON.parse((await get('score-tracker:queue')) || '{"pending":[],"parked":[]}');
 ok('and the write is still queued after the reload',
   stillQueued.pending.some((e) => e.kind === 'game' && e.payload.id === blockedRecord.id),
-  JSON.stringify(stillQueued.pending.map((e) => e.kind)));
+  'pending: ' + JSON.stringify(stillQueued.pending.map((e) => ({ k: e.kind, a: e.attempts, e: (e.lastError || {}).message })))
+    + '\n  parked: ' + JSON.stringify(stillQueued.parked.map((e) => ({ k: e.kind, e: (e.error || {}).message })))
+    + '\n  synced: ' + String(await get('score-tracker:syncedGames'))
+    + '\n  looking for: ' + blockedRecord.id
+    + '\n  page said: ' + (pageLog.slice(-6).join(' | ') || 'nothing'));
 eq('with nothing parked', stillQueued.parked.length, 0);
 
 // Unblock: the queued write should now land, and nothing should double up.
@@ -472,10 +512,12 @@ await js(`window.dispatchEvent(new Event('online')), 1`);
 
 const landed = await until('the queued game to land', async () => {
   const rows = await gamesFor(teamId);
-  return rows.find((g) => g.client_id === blockedRecord.id) || null;
+  return rows.find((g) => g.client_id === blockedRecord.id && g.status === 'final') || null;
 }, 25000);
 ok('once the write can go through, it lands', !!landed);
-eq('and exactly one row was added', (await gamesFor(teamId)).length, countBeforeBlocked + 1);
+eq('and no extra row was created', (await gamesFor(teamId)).length, countBeforeBlocked);
+eq('the game still has exactly one row',
+  (await gamesFor(teamId)).filter((g) => g.client_id === blockedRecord.id).length, 1);
 
 await send('Page.reload');
 const settledAfter = await until('one final reload', async () => {
