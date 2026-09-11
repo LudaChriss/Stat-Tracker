@@ -40,7 +40,7 @@ go. None of that was touched.
 
 One more thing worth knowing: a game abandoned by walking away — phone flat, app
 closed, never finalised — now leaves a `live` row and its log in the account.
-That is a recovery, not a leak: the plays are there. But see §3, those rows stay
+That is a recovery, not a leak: the plays are there. But see §4, those rows stay
 live indefinitely.
 
 ---
