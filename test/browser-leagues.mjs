@@ -226,31 +226,38 @@ const { SEEDED } = await import('./fixtures-history.js');
 const seeded = SEEDED(INITIAL_STATE);
 
 const boot = async (p, acct, teamName) => {
-  await p.goto('about:blank');
-  await sleep(200);
-  await p.send('Storage.clearDataForOrigin', { origin: APP, storageTypes: 'all' });
-  await p.goto(APP);
-  // Wait for the APP's document, not merely for "a document": about:blank is
-  // complete the instant it is asked, and seeding localStorage against it puts
-  // the session somewhere the app will never look.
-  await until(
-    () => p.js(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete' ? 1 : null`),
-    20000,
-  );
-  await p.put(acct.authKey, acct.authValue);
-  await p.put('score-tracker:state', JSON.stringify({
+  const state = JSON.stringify({
     version: 3,
     state: { ...seeded, myTeam: { ...seeded.myTeam, name: teamName }, history: [] },
-  }));
-  // The app writes its own state on every change, so the seed has to be the
-  // thing that survives the reload — not merely the thing that was written
-  // last. Check, rather than assume.
-  await p.reload();
-  const seeded$ = await until(async () => {
+  });
+
+  // Seed BEFORE the app's own scripts run.
+  //
+  // Writing localStorage into an already-running app races its first save:
+  // it boots on empty storage, writes the blank starting season, and whichever
+  // of the two lands last wins. That is why an earlier version of this harness
+  // failed intermittently with the app showing first-run setup. Injecting on
+  // the new document puts the session and the season in place before React ever
+  // mounts, which is not a race at all.
+  await p.goto('about:blank');
+  await sleep(150);
+  await p.send('Storage.clearDataForOrigin', { origin: APP, storageTypes: 'all' });
+  const { identifier } = await p.send('Page.addScriptToEvaluateOnNewDocument', {
+    source:
+      `try {\n` +
+      `  localStorage.setItem(${JSON.stringify(acct.authKey)}, ${JSON.stringify(acct.authValue)});\n` +
+      `  localStorage.setItem('score-tracker:state', ${JSON.stringify(state)});\n` +
+      `} catch (e) {}`,
+  });
+  await p.goto(APP);
+  const landed = await until(async () => {
     const s = await p.state();
     return s && s.myTeam && s.myTeam.name === teamName ? s : null;
-  }, 20000);
-  if (!seeded$) return null;
+  }, 25000);
+  // Remove it, or every later reload would re-seed over whatever the app has
+  // since done.
+  await p.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  if (!landed) return null;
 
   const team = await until(async () => {
     const r = await admin.from('teams').select('*').eq('created_by', acct.id);
@@ -428,6 +435,106 @@ ok('B sees the fixture the commissioner made',
     return t.includes('Schedule · 1') && t.includes(`Boss United ${stamp} vs Manager City ${stamp}`) ? 1 : null;
   }, 25000)),
   'on screen: ' + String(await B.text()).slice(0, 320));
+
+// =============================================================================
+console.log('\n--- a played game moves the table ------------------------------');
+// =============================================================================
+//
+// Written with the service key rather than scored through the app, because the
+// season screen's opponent picker still works in device-side slugs — a game
+// scored there resolves its opponent to a team outside the league. That gap is
+// named in the report. What is verified here is the half 4c adds: a league game
+// that exists moves the table and fills the leaders, on both phones.
+{
+  const played = await admin.from('games').insert({
+    league_id: leagueRow.id,
+    home_team_id: bossTeam.id,
+    away_team_id: mgrTeam.id,
+    status: 'final',
+    result: 'W',
+    home_score: 6,
+    away_score: 3,
+    sport: 'kickball',
+    label: 'Sep 10',
+    client_id: `g-played-${stamp}`,
+    created_by: boss.id,
+  }).select('id').single();
+  need('a played league game', !played.error, played.error && played.error.message);
+
+  // Every stat named on every row: a batched insert aligns columns across the
+  // rows it is given, so a field present on one and absent on another arrives
+  // as an explicit null and trips the NOT NULL.
+  const stat = (over) => ({
+    game_id: played.data.id, ab: 0, h: 0, r: 0, rbi: 0, bb: 0, k: 0, d: 0, t: 0, hr: 0, ...over,
+  });
+  const lines = await admin.from('game_lines').insert([
+    stat({ team_id: bossTeam.id, name_snapshot: 'Maya Ortiz', home_away: 'home', ab: 4, h: 3, r: 3, rbi: 2, hr: 1 }),
+    stat({ team_id: bossTeam.id, name_snapshot: 'Deon Wallace', home_away: 'home', ab: 4, h: 1, r: 1, rbi: 1 }),
+    stat({ team_id: mgrTeam.id, name_snapshot: 'Robin Vega', home_away: 'away', ab: 4, h: 2, r: 2, rbi: 2 }),
+  ]);
+  need('its box score', !lines.error, lines.error && lines.error.message);
+}
+
+eq('A: back to the list', await A.tap('‹ Back'), 'OK');
+eq('A: re-opened the league', await A.tap(`Sunday Social ${stamp}`), 'OK');
+
+const tableOnA = await until(async () => {
+  const t = (await A.text()) || '';
+  return t.includes('TEAM') && t.includes('PCT') ? t : null;
+}, 25000);
+ok('the league table is on screen', !!tableOnA, 'on screen: ' + String(await A.text()).slice(0, 320));
+
+// Read the table as a table, not as a paragraph. The rows are a six-column
+// grid, so this is the same thing a person sees, column by column.
+const readTable = async (p) =>
+  p.js(`(() => {
+    const grids = [...document.querySelectorAll('div')].filter(
+      (d) => d.style.display === 'grid' && d.children.length === 6);
+    return grids.map((g) => [...g.children].map((c) => (c.textContent || '').replace(/\\s+/g, ' ').trim()));
+  })()`);
+
+const rowsOnA = await readTable(A);
+ok('the table has a header and a row per team', Array.isArray(rowsOnA) && rowsOnA.length === 3,
+  JSON.stringify(rowsOnA));
+if (Array.isArray(rowsOnA) && rowsOnA.length === 3) {
+  eq('the columns are the ones a table has', rowsOnA[0], ['', 'TEAM', 'W', 'L', 'T', 'PCT']);
+  // SEEDED carries a manually-entered prior record, and both teams migrated up
+  // from it — so the played game is added to 4-1-0, not counted on its own.
+  // That is the rule the season table already follows, and the league table
+  // agreeing with it is the point.
+  eq('the winner is top, with the win added to its prior record',
+    rowsOnA[1].slice(1), [`Boss United ${stamp}YOU`, '5', '1', '0', '.833']);
+  eq('and the loser below it, with the loss added to theirs',
+    rowsOnA[2].slice(1), [`Manager City ${stamp}`, '4', '2', '0', '.667']);
+  eq('ranked 1 and 2', [rowsOnA[1][0], rowsOnA[2][0]], ['1', '2']);
+}
+ok('and the phone knows which row is its own', String(tableOnA || '').includes('YOU'));
+
+ok('the leaders are filled in from the box score',
+  !!(await until(async () => {
+    const t = (await A.text()) || '';
+    return t.includes('Leaders') && t.includes('Maya Ortiz') ? t : null;
+  }, 20000)),
+  'on screen: ' + String(await A.text()).slice(0, 400));
+
+eq('A: switched the leaders to home runs', await A.tap('HR'), 'OK');
+ok('and the home-run leader is the one who hit one',
+  !!(await until(async () => {
+    const t = (await A.text()) || '';
+    return t.includes('Home runs across every game') && t.includes('Maya Ortiz') ? 1 : null;
+  }, 20000)),
+  'on screen: ' + String(await A.text()).slice(0, 400));
+
+// The follower sees the same table. It is the league's table, not the
+// commissioner's.
+eq('B: back to the list', await B.tap('‹ Back'), 'OK');
+eq('B: re-opened the league', await B.tap(`Sunday Social ${stamp}`), 'OK');
+ok('the follower sees the same table',
+  !!(await until(async () => {
+    const t = (await B.text()) || '';
+    return t.includes('PCT') && t.includes('Maya Ortiz') ? 1 : null;
+  }, 25000)),
+  'on screen: ' + String(await B.text()).slice(0, 400));
 
 // =============================================================================
 console.log('\n--- leaving is never a favour ---------------------------------');

@@ -189,25 +189,35 @@ const { SEEDED } = await import('./fixtures-history.js');
 const seeded = SEEDED(INITIAL_STATE);
 
 const boot = async (p, acct, seedState) => {
+  // Seed BEFORE the app's own scripts run. Writing localStorage into an
+  // already-running app races its first save — it boots on empty storage,
+  // writes the blank starting season, and whichever lands last wins. Injecting
+  // on the new document is not a race at all.
   await p.goto('about:blank');
-  await sleep(200);
+  await sleep(150);
   await p.send('Storage.clearDataForOrigin', { origin: APP, storageTypes: 'all' });
+  const lines = [`localStorage.setItem(${JSON.stringify(acct.authKey)}, ${JSON.stringify(acct.authValue)});`];
+  if (seedState) {
+    lines.push(
+      `localStorage.setItem('score-tracker:state', ${JSON.stringify(JSON.stringify({ version: 3, state: seedState }))});`,
+    );
+  }
+  const { identifier } = await p.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `try { ${lines.join(' ')} } catch (e) {}`,
+  });
   await p.goto(APP);
-  await until(() => p.js(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete' ? 1 : null`), 20000);
-  await p.put(acct.authKey, acct.authValue);
-  if (seedState) await p.put('score-tracker:state', JSON.stringify({ version: 3, state: seedState }));
-  await p.reload();
-  // The app writes its own state on every change, so the seed has to be the
-  // thing that SURVIVES the reload, not merely the thing written last. Check,
-  // rather than assume — this is what made the first version of this harness
-  // fail intermittently for reasons that had nothing to do with the app.
   if (seedState) {
     const landed = await until(async () => {
       const s = await p.state();
       return s && s.myTeam && s.myTeam.name === seedState.myTeam.name ? s : null;
-    }, 20000);
-    need(`${p.name}'s seeded season survived the reload`, !!landed);
+    }, 25000);
+    need(`${p.name}'s seeded season is in place before the app runs`, !!landed);
+  } else {
+    await until(() => p.js(`document.readyState === 'complete' ? 1 : null`), 20000);
   }
+  // Remove it, or every later reload would re-seed over whatever the app has
+  // since done.
+  await p.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
 };
 
 // ---- one account, two teams ---------------------------------------------------

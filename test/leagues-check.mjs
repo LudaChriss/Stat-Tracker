@@ -343,6 +343,51 @@ refused('nor a fixture with no id',
 }
 
 // =============================================================================
+console.log('\n--- a game between two league teams belongs to the league ------');
+// =============================================================================
+//
+// Nothing the app wrote ever set games.league_id, so a league table built from
+// league games would have been permanently empty however many were played in
+// it. The rows existed; they were just filed nowhere the league could see.
+{
+  // Both Rovers and Wanderers are in the league at this point.
+  const clientId = `g-lg-${stamp}`;
+  const started = await rovers.client.rpc('start_live_game', {
+    p_team_id: roversId,
+    payload: { clientId, opponentId: null, opponent: 'Wanderers', sport: 'kickball', home: true },
+  });
+  eq('a live game between two league teams starts', started.error, null);
+
+  const { data } = await admin.from('games').select('league_id, home_team_id, away_team_id').eq('id', started.data).single();
+  // The opponent resolves to a NEW team (the app's opponent is a client-side
+  // slug, not an account team), which is outside the league — so this game is
+  // a friendly, and must NOT be filed under the league.
+  eq('a game against a team outside the league is not a league game', data.league_id, null);
+}
+
+{
+  // The real case: both sides are league teams. Built directly, because the
+  // app's own opponent picker still works in client-side slugs — see the
+  // report.
+  const made = await admin.from('games').insert({
+    league_id: null,
+    home_team_id: roversId,
+    away_team_id: wanderersId,
+    status: 'scheduled',
+    sport: 'kickball',
+    client_id: `g-pair-${stamp}`,
+    created_by: rovers.id,
+  }).select('id').single();
+  eq('setup: a game between the two league teams', made.error, null);
+
+  const shared = await admin.rpc('shared_league', { p_home: roversId, p_away: wanderersId });
+  eq('the two teams share a league', shared.data, leagueId);
+
+  const apart = await admin.rpc('shared_league', { p_home: roversId, p_away: outsiderId });
+  eq('a team outside it shares nothing', apart.data, null);
+}
+
+// =============================================================================
 console.log('\n--- who can see a league --------------------------------------');
 // =============================================================================
 {

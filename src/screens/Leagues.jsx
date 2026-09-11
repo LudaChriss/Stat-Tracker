@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { C, btn, tnum } from '../theme.js';
-import { Card, Section } from '../components/ui.jsx';
+import { Avatar, Card, Section } from '../components/ui.jsx';
 import { LEAGUE_INVITABLE_ROLES, LEAGUE_ROLE_BLURB, LEAGUE_ROLE_LABEL, normalizeCode } from '../data/leagues.js';
+import { leagueLeaders, leagueStandings, statLabel } from '../game/leagueTables.js';
+import { initials } from '../game/logic.js';
+import { rateString } from '../game/stats.js';
 
 // One screen for both halves of a league: the ones you are in, and the one you
 // are looking at. Two screens would mean two places for "which league am I on"
@@ -279,11 +282,97 @@ function LeagueList({ leagues, actions }) {
   );
 }
 
+const TABLE_GRID = '20px minmax(0, 1fr) 28px 28px 28px 46px';
+
+/** The league table. Every final game in the league, not just ours. */
+function Table({ rows, myTeamId }) {
+  return (
+    <Card style={{ overflow: 'hidden' }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: TABLE_GRID,
+          padding: '10px 12px 8px',
+          fontSize: 11,
+          fontWeight: 700,
+          color: C.muted,
+          letterSpacing: '.05em',
+        }}
+      >
+        <span />
+        <span>TEAM</span>
+        <span style={{ textAlign: 'center' }}>W</span>
+        <span style={{ textAlign: 'center' }}>L</span>
+        <span style={{ textAlign: 'center' }}>T</span>
+        <span style={{ textAlign: 'right' }}>PCT</span>
+      </div>
+      {rows.map((r, i) => (
+        <div
+          key={r.id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: TABLE_GRID,
+            alignItems: 'center',
+            padding: '11px 12px',
+            borderTop: `1px solid ${C.hair}`,
+            fontSize: 14,
+            background: r.id === myTeamId ? '#F4FAFB' : '#fff',
+          }}
+        >
+          <span style={{ fontWeight: 700, color: C.fog, fontSize: 12 }}>{i + 1}</span>
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontWeight: r.id === myTeamId ? 800 : 600,
+              minWidth: 0,
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+            {r.id === myTeamId && (
+              <span
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 800,
+                  color: C.teal,
+                  background: '#DDF1F4',
+                  borderRadius: 5,
+                  padding: '2px 5px',
+                  flex: '0 0 auto',
+                }}
+              >
+                YOU
+              </span>
+            )}
+          </span>
+          <span style={{ textAlign: 'center', fontWeight: 800, ...tnum }}>{r.w}</span>
+          <span style={{ textAlign: 'center', fontWeight: 600, color: C.muted, ...tnum }}>{r.l}</span>
+          <span style={{ textAlign: 'center', fontWeight: 600, color: C.muted, ...tnum }}>{r.t}</span>
+          <span style={{ textAlign: 'right', fontWeight: 600, color: C.muted, ...tnum }}>
+            {rateString(r.w + r.t / 2, r.gp)}
+          </span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 /** One league: its teams, its fixtures, and what a commissioner can do to them. */
 function LeagueDetail({ leagues, actions, myTeamId }) {
   const { detail, busy, error, code, notice } = leagues;
   const { league, teams, games, role } = detail;
+  const lines = detail.lines || [];
   const isAdmin = role === 'league_admin';
+  const [statKey, setStatKey] = useState('r');
+
+  const table = useMemo(() => leagueStandings(teams, games), [teams, games]);
+  const leaders = useMemo(
+    () => leagueLeaders(lines, teams, { stat: statKey, limit: 5 }),
+    [lines, teams, statKey],
+  );
+  const trackedGames = table.reduce((n, r) => n + r.tracked, 0) / 2;
+  const priors = table.reduce((n, r) => n + (r.gp - r.tracked), 0);
 
   const [inviteRole, setInviteRole] = useState('viewer');
   const [showInvite, setShowInvite] = useState(false);
@@ -302,6 +391,86 @@ function LeagueDetail({ leagues, actions, myTeamId }) {
 
   return (
     <div style={{ padding: 16 }}>
+      {teams.length > 0 && (
+        <>
+          <Section>Table</Section>
+          <Table rows={table} myTeamId={myTeamId} />
+          {priors > 0 && (
+            <div style={{ fontSize: 11, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+              Includes {priors} {priors === 1 ? 'game' : 'games'} entered by hand, with no box
+              score. Each team keeps its own.
+            </div>
+          )}
+          {trackedGames === 0 && (
+            <div style={{ fontSize: 11, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+              No games scored in this league yet.
+            </div>
+          )}
+          <div style={{ height: 14 }} />
+        </>
+      )}
+
+      {leaders.length > 0 && (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              marginBottom: 8,
+            }}
+          >
+            <Section style={{ marginBottom: 0 }}>Leaders</Section>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {['r', 'rbi', 'h', 'hr'].map((k) => (
+                <button
+                  key={k}
+                  onClick={() => setStatKey(k)}
+                  style={{
+                    background: statKey === k ? '#DDF1F4' : 'none',
+                    border: `1px solid ${statKey === k ? C.teal : 'transparent'}`,
+                    color: statKey === k ? C.header : C.muted,
+                    borderRadius: 99,
+                    padding: '0 10px',
+                    minHeight: 44,
+                    fontSize: 11.5,
+                    fontWeight: 800,
+                    ...btn,
+                  }}
+                >
+                  {k.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Card style={{ padding: '6px 0' }}>
+            {leaders.map((p) => (
+              <div
+                key={p.key}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px' }}
+              >
+                <Avatar ini={initials(p.name)} c={C.teal} size={30} fs={12} />
+                <span style={{ flex: 1, fontWeight: 700, fontSize: 13.5, minWidth: 0 }}>
+                  <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.name}
+                  </span>
+                  {p.team && (
+                    <span style={{ display: 'block', color: C.fog, fontWeight: 600, fontSize: 11.5 }}>
+                      {p.team}
+                    </span>
+                  )}
+                </span>
+                <span style={{ fontSize: 19, fontWeight: 800, color: C.header, ...tnum }}>{p[statKey]}</span>
+              </div>
+            ))}
+          </Card>
+          <div style={{ fontSize: 11, color: C.fog, fontWeight: 600, margin: '6px 2px 0' }}>
+            {statLabel[statKey]} across every game scored in this league.
+          </div>
+          <div style={{ height: 14 }} />
+        </>
+      )}
+
       <Section>Teams · {teams.length}</Section>
       {!teams.length && (
         <Card style={{ padding: 14 }}>

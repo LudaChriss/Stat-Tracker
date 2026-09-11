@@ -84,10 +84,24 @@ export function createLeagues(client) {
         if (r.error) return { error: r.error };
       }
       if (!league.data) return { error: { message: 'That league could not be found.' } };
+
+      // Box-score lines for the games that have actually been played. Asked for
+      // separately and only when there are any, because a league with a
+      // schedule and no results yet should cost one round trip, not two.
+      const finalIds = (games.data || []).filter((g) => g.status === 'final').map((g) => g.id);
+      let lines = [];
+      if (finalIds.length) {
+        const got = await client.from('game_lines').select('*').in('game_id', finalIds);
+        // A failed read of the lines costs the leaders table and nothing else,
+        // so it is not worth failing the whole league over.
+        if (!got.error) lines = got.data || [];
+      }
+
       return {
         league: league.data,
         teams: teams.data || [],
         games: games.data || [],
+        lines,
         error: null,
       };
     },
