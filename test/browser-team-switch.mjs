@@ -355,11 +355,20 @@ ok('but it says the roster is somebody else\'s',
   'on screen: ' + String(scorerView || '').slice(0, 300));
 ok('there is no Add player button', !String(scorerView || '').includes('+ Add player'));
 ok('and no Rename button', !String(scorerView || '').includes('Rename'));
+// 4d: the manual record for games never scored here is the team's own, and its
+// manager's to set. It counts towards the team's place in a league table, which
+// is what makes whose it is more than a detail.
+ok('nor a way to adjust the team\'s record',
+  !String(scorerView || '').includes('Adjust for untracked games'));
+ok('but it is explained rather than simply missing',
+  String(scorerView || '').includes("its manager's to set"),
+  'on screen: ' + String(scorerView || '').slice(0, 400));
 ok('while the manager still has both',
   (await A.tap('Manage')) === 'OK' &&
     !!(await until(async () => {
       const t = (await A.text()) || '';
-      return t.includes('+ Add player') && t.includes('Rename') ? 1 : null;
+      return t.includes('+ Add player') && t.includes('Rename')
+        && t.includes('Adjust for untracked games') ? 1 : null;
     }, 20000)));
 
 // ---- nothing fell over -------------------------------------------------------

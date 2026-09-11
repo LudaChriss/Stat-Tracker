@@ -388,6 +388,53 @@ console.log('\n--- a game between two league teams belongs to the league ------'
 }
 
 // =============================================================================
+console.log('\n--- a manual record stays the team\'s own -----------------------');
+// =============================================================================
+//
+// Games played before the app existed, or never scored in it, are an offset a
+// manager sets on their own team. In a league that offset counts towards their
+// place in the table — so the question of WHOSE it is stops being academic.
+// One manager must not be able to move another team's record, and a team
+// leaving and rejoining must not lose it.
+{
+  const set = await rovers.client
+    .from('teams').update({ prior_w: 6, prior_l: 2, prior_t: 1 }).eq('id', roversId).select();
+  eq('a manager sets their own team\'s prior record', set.error, null);
+
+  const theirs = await wanderers.client
+    .from('teams').update({ prior_w: 99 }).eq('id', roversId).select();
+  eq('another manager cannot touch it', (theirs.data || []).length, 0);
+
+  const { data } = await admin.from('teams').select('prior_w, prior_l, prior_t').eq('id', roversId).single();
+  eq('and it is exactly what its own manager set', [data.prior_w, data.prior_l, data.prior_t], [6, 2, 1]);
+
+  // It travels with the team, not with the league.
+  await rovers.client.from('teams').update({ league_id: null }).eq('id', roversId);
+  await rovers.client.from('teams').update({ league_id: leagueId }).eq('id', roversId);
+  const { data: after } = await admin
+    .from('teams').select('prior_w, prior_l, prior_t').eq('id', roversId).single();
+  eq('leaving and rejoining a league does not touch it',
+    [after.prior_w, after.prior_l, after.prior_t], [6, 2, 1]);
+
+  // And the table counts it for that team and nobody else.
+  const { leagueStandings } = await import('../src/game/leagueTables.js');
+  const teamsIn = await admin.from('teams').select('*').eq('league_id', leagueId);
+  const gamesIn = await admin.from('games').select('*').eq('league_id', leagueId);
+  const rows = leagueStandings(teamsIn.data || [], gamesIn.data || []);
+  const roversRow = rows.find((r) => r.id === roversId);
+  const wanderersRow = rows.find((r) => r.id === wanderersId);
+  // One league game has been played by this point in the suite — the fixture
+  // above, marked final. So the table is that game ON TOP OF each team's own
+  // manual record, which is the whole rule.
+  eq('the table starts that team from its own record and adds what it tracked',
+    [roversRow.w, roversRow.l, roversRow.t], [7, 2, 1]);
+  eq('and the other team\'s record is its own, untouched by theirs',
+    [wanderersRow.w, wanderersRow.l, wanderersRow.t], [0, 1, 0]);
+  eq('games played counts the untracked ones too', roversRow.gp, 10);
+  eq('though only one of them was actually scored here', roversRow.tracked, 1);
+}
+
+// =============================================================================
 console.log('\n--- who can see a league --------------------------------------');
 // =============================================================================
 {

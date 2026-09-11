@@ -210,6 +210,7 @@ export default function RosterEditor({ v, actions }) {
               {v.totalRecord}
             </span>
           </div>
+          {canEdit ? (
           <button
             onClick={actions.openRecordEditor}
             style={{
@@ -227,6 +228,12 @@ export default function RosterEditor({ v, actions }) {
           >
             Adjust for untracked games
           </button>
+          ) : (
+            <div style={{ fontSize: 11.5, color: C.fog, fontWeight: 600, marginTop: 10, lineHeight: 1.45 }}>
+              This team's record for games that were never scored here is its manager's to set. It
+              is this team's own, and counts towards its place in any league table.
+            </div>
+          )}
         </Card>
       </div>
 
