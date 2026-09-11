@@ -31,13 +31,18 @@ function BookCell({ c }) {
   );
 }
 
+// 44, not 42. These page the scorebook between innings, mid-game, on a phone
+// held in one hand — and they were the only controls in the app the viewport
+// audit has ever flagged as too small to hit. Measured at 36x42 on an iPhone
+// SE because the glyph is narrower than the box it was given.
 const pager = {
   background: 'none',
   border: '1px solid rgba(255,255,255,.2)',
   color: C.pale,
   borderRadius: 10,
-  width: 42,
-  height: 42,
+  width: 44,
+  minWidth: 44,
+  height: 44,
   fontSize: 15,
   ...btn,
 };
