@@ -76,12 +76,16 @@ Write the script to a file and run the file.
   season on boot, so a `Runtime.evaluate` write races it and whichever lands
   last wins — which shows up as the app sitting on first-run setup, at random,
   for reasons that have nothing to do with the change under test.
-- `browser-two-phones.mjs` opens **two private browser contexts** so the two
-  phones have genuinely separate localStorage and separate network conditions —
-  two tabs on one origin share storage and would prove nothing. It disposes both
-  contexts when it finishes; a run that dies partway leaves them behind, and
-  enough of those will start killing CDP sessions mid-test for reasons that have
-  nothing to do with the app. Restart Chrome if it starts behaving oddly.
+- `browser-two-phones.mjs`, `browser-leagues.mjs` and `browser-team-switch.mjs`
+  each open **private browser contexts** so their phones have genuinely separate
+  localStorage and separate network conditions — two tabs on one origin share
+  storage and would prove nothing. Each disposes its contexts on a normal
+  finish. **A run that exits early through `need()` does not**, and enough
+  orphans will start killing CDP sessions mid-test for reasons that have nothing
+  to do with the app. If a harness starts failing strangely, check
+  `curl -s localhost:9222/json | grep -c '"type": "page"'` — more than a couple
+  means orphans. Disposing every non-default browser context clears them, or
+  restart Chrome.
 - `session-expiry.mjs` and `browser-session.mjs` need genuinely short-lived
   tokens: set `jwt_expiry = 8` under `[auth]` in `supabase/config.toml` and
   restart the stack. **Put it back to 3600 afterwards** — an 8-second token

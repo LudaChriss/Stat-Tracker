@@ -271,6 +271,12 @@ Also outstanding:
 - **Opposing teams in the SEASON view still carry no `priorT`** — pre-existing,
   noted in `seasonMapping`, and untouched here. The LEAGUE table reads each
   team's own `prior_t` from its row and is unaffected.
+- **Harness hygiene:** the three harnesses that open private browser contexts
+  dispose them on a normal finish but not when they exit early through
+  `need()`. Enough orphaned contexts will start killing CDP sessions mid-test
+  for reasons that have nothing to do with the app. The browser was cleaned up
+  at the end of this session and CLAUDE.md says how to spot it; making `need()`
+  itself tidy up is a small job nobody has done.
 
 ---
 
