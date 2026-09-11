@@ -1,3 +1,346 @@
+# Report — phase 4, multi-team and multi-league (4a, 4b, 4c, 4d)
+
+All four slices built and green, on branch **`phase-4`**, six commits, nothing
+pushed and the hosted project untouched. **1179 assertions across 36 suites**
+(up from 1044 across 33), build clean, viewport audit clean, and all seven
+browser harnesses re-run in one sequential pass and passing.
+
+**Read §5 and §6 before you deploy.** Three new migrations. Two of them replace
+functions the live app calls, and the order is **migrations first this time** —
+§6 says why, and why that direction is safe in a way the other one is not.
+
+**The headline: a league is now a real thing in the app.** Start one, hand out a
+code, bring teams in, put fixtures on a calendar, and read one table across all
+of it. A phone can be on several teams and choose which it is looking at.
+
+**And the honest headline under it:** the season screen's own opponent picker
+still works in device-side slugs, so a game scored the normal way does not land
+in the league table yet. §4 leads with it.
+
+---
+
+## 1. What was built, and how far it was verified
+
+### Verified in real browsers, end to end
+
+**`test/browser-leagues.mjs`** — two browser contexts, two accounts, one league.
+A commissioner opens the leagues screen, starts a league, brings their own team
+in, picks a role and mints a code. A manager on the other phone types that code,
+ticks "bring my team", and lands in the same league as a follower — seeing both
+teams and none of the commissioner's controls. The commissioner schedules a
+fixture between the two teams and the follower sees it. A played game is then
+recorded and **the table is read column by column off the screen**: the winner
+top with the win added to its prior record, the loser below it, ranked 1 and 2,
+percentages right — and the leaders filled in from the box score, switchable
+between runs, RBI, hits and home runs. Finally the follower leaves, which takes
+their team out and keeps their membership.
+
+**`test/browser-team-switch.mjs`** — one account managing two teams, and a
+second account that only scores for one of them. The switcher lists both, marks
+the one being shown, and switching repoints the app: the other team's roster and
+the other team's batting order, the device and the account both recording which
+team it is on. Then the part that matters — the first team's roster must not
+have been written into the second team's row on the way past — checked in the
+database after waiting out the season-write debounce. Then back again, with the
+first team's roster and opposing teams intact. Then the scorer's phone: the
+roster screen opens, says whose roster it is, and offers no Add player, no
+Rename and no record adjustment, while the manager still has all three.
+
+Both harnesses require **both consoles to be silent**, warnings included.
+
+Also re-run and passing unchanged, in one sequential pass:
+`browser-save-game`, `browser-backfill`, `browser-parked`, `browser-invites`,
+`browser-two-phones`.
+
+### Verified against the real database, not the browser
+
+**`leagues-check.mjs`** (72 assertions) — creating a league makes you its admin
+atomically; a manager **cannot** attach their team to a league they were never
+invited to, nor create one already inside it; only a league admin mints a league
+code and it cannot grant a team role; the holder of a code can see what it is
+for without being able to read the invites table at all; redeeming it brings the
+team in and grants the membership together; a spent code, a made-up code and a
+*team* code handed to `join_league` are each refused by name, and a refusal
+burns nothing and grants nothing; a manager already in the league can bring a
+second team in; leaving and rejoining works. Then fixtures: only a commissioner
+schedules, rescheduling the same fixture moves it rather than adding one, a team
+cannot play itself, a team outside the league cannot be scheduled, and a game
+that has been played cannot be rescheduled. Then visibility: a public league is
+readable by anyone including anonymously, a private one only by its members.
+Then the manual record: a manager sets their own team's, another manager's
+update changes nothing, leaving a league does not touch it, and the table starts
+that team from its own record while nobody else's moves.
+
+**`lineup-share-check.mjs`** — the batting order saved by a manager is read back
+by a scorer on another account, exactly; reordering moves it; **a payload that
+says nothing about the order leaves the recorded order alone**, while an
+explicitly empty one is obeyed; a scorer cannot rewrite it; a player dropped
+from the roster leaves the order with them.
+
+### Verified in tests only
+
+- **`league-tables-check.mjs`** — the table and the leaders, from row shapes,
+  with no database. Includes the one that matters: the same three games told
+  once as the league sees them and once as a team's own season does, required to
+  give the same W-L-T, games played and percentage. If those two ever drift, one
+  of the two tables on a person's phone is lying about the same team.
+- The **"leagues need an account"** state of the league screen is measured by
+  the viewport audit; its signed-in states are measured by hand in the browser
+  harness, not by the audit.
+- The **team switcher's "changes have not reached your account yet" warning**
+  renders from code inspection only. The switch itself is driven in a browser;
+  that particular banner needs an account with a stuck queue, which no harness
+  currently sets up.
+
+### Not verified anywhere
+
+- **A league with more than two teams.** Nothing in the table or the leaders
+  cares, and nothing has run it.
+- **A private league in the app.** The database half is checked; there is no UI
+  for the toggle, so nobody has seen it on a screen.
+- Anything on a real iPhone. That still needs a deploy.
+- A league whose teams are on **different sports**. The column exists on both;
+  nothing reconciles them.
+
+---
+
+## 2. Judgement calls
+
+**A team enters a league by code, and leaves freely.** D14 states it in full.
+The alternative — a commissioner adding any team they can see — would let
+someone capture a team they do not manage. Leaving is deliberately
+unrestricted: a league that can hold a team hostage is worse than one that loses
+one, and the membership survives so they can come back without a new code.
+
+**League invites are a NEW function, not a parameter on `create_invite`.**
+Adding even a defaulted argument creates a second overload rather than replacing
+the function, which is how `_012` left an unguarded `save_season` live for a
+day. `create_invite` is not touched at all.
+
+**`peek_invite` is dropped and recreated at the same signature.** Its return
+type changes, which `create or replace` cannot do. Dropping and recreating at
+the identical signature is a replacement, not an overload —
+`select proname from pg_proc where proname = 'peek_invite'` still returns one
+row — and §5 says how to check that after deploying.
+
+**`join_league` tolerates someone who is already a member, and does not burn the
+code.** Managing two teams in one league would otherwise dead-end on
+`accept_invite` refusing a duplicate membership. The code stays unspent because
+it granted nothing, and this confers no reach: a league member can already move
+a team they manage into that league with a plain update.
+
+**The league guard exempts `service_role`.** The seed and migration paths have
+no `auth.uid()` and already bypass row-level security. A trigger stricter than
+RLS would break fixtures that were never the threat.
+
+**League state lives outside `useGame`.** `useGame` owns the season — one team,
+its roster, its history, the game in progress. One account can be in several
+leagues, and folding the two together would let the season and the league
+disagree about which team you are, which is the confusion this phase exists to
+remove. Nothing is fetched until the leagues screen is opened: a league is not
+needed to score a game, and a phone at a field should not wait on one.
+
+**Commissioner controls are behind the role the database reports**, never one
+the client assumes — the same rule the team invite button already followed.
+
+**Roster controls are hidden only when we KNOW the team is somebody else's.** A
+null role is every state that has always been able to edit (local-only, signed
+out, a session we cannot reach), and those keep working exactly as they do. The
+conservative direction costs one case: a **league admin** may manage a team in
+their league (`can_manage_team` says so) but holds no team membership, so the
+role read is null... and a null role *allows*, so they keep their controls. The
+case that loses is a league admin who holds an explicit non-manager membership
+on the team; they are shown nothing, and the database would have let them.
+Hiding a control that would have worked is the harmless way round.
+
+**A game belongs to a league only when both teams do — and that makes it
+public.** D15. Filing a friendly under a league would put a result in a table
+against a team the table does not contain. And a league is public by default, so
+filing a game under one makes it and its box score readable by anyone. That is
+what a league is; a league whose games should not be public is set to private,
+which RLS already enforces and which has no UI yet.
+
+**The batting order is shared, and silence about it is not an instruction.**
+D16. The guard matters more than the feature: an older phone sends no `lineup`
+key, and reading that as "the order is empty" would wipe a real order every time
+it saved.
+
+**The league table and the season table share their rules deliberately.** A tie
+is half a win; a manual prior record is added to what was tracked. They are
+different modules on different inputs, and a test tells the same games both ways
+and requires the same answer.
+
+**League leaders key on the player row where there is one, and on team plus name
+where there is not.** An opponent scored without a roster has no player rows at
+all. Keying on name alone would merge two people who share one — the exact
+mistake the scorebook's pids exist to prevent.
+
+---
+
+## 3. Found on the way, and fixed
+
+**A team could walk into any league it could see.** `teams_update_manager_or_admin`
+admits a team's own manager for every column, `league_id` included, and nothing
+checked which league. Anyone managing a team could attach it to any public
+league and appear in that league's standings uninvited. Not a crash — a table
+that is quietly wrong. Closed by a pair of triggers (D14) and checked from both
+the update and the insert side.
+
+**One team's roster was written into another team's row on switching.** Two
+separate causes, both found by `browser-team-switch.mjs` against a real
+database, and the harness was written to look for exactly this:
+
+- Every repository read the team id from one shared mutable ref. A season write
+  is debounced, so the previous team's repository still had a save in flight
+  when the ref moved, and it then resolved against the NEW team. Each repository
+  is now bound to the team it was built for.
+- The local mirror is stamped with the team it holds so it is never handed to
+  another team as a seed — but `save()` wrote the app state to the mirror
+  unstamped, stripping that stamp on every save. It is stamped on the way in
+  now too.
+
+**Nothing the app wrote ever set `games.league_id`.** The league table would
+have been permanently empty however many games were played in it. `save_game`
+and `start_live_game` now file a game under the league both teams share.
+
+**A blank season was being sent to the account.** That is what the app holds for
+the moment between switching to a team it has never cached and that team
+arriving. `save_season` refuses it, so nothing was ever lost — but the refusal
+parks a write that says something alarming and means nothing. The adapter no
+longer sends one.
+
+**The scorebook pager arrows were 36×42 on an iPhone SE** — the only controls in
+the app the viewport audit has ever flagged, and they page the scorebook
+mid-game on a phone held in one hand. **Pre-existing and present on `main`:** the
+same audit run from `main` reports the same two. Worth saying plainly, because
+it means the phase 3 report's "viewport audit clean" line rested on a single run
+rather than a repeated one. Fixed, and the leagues screen was added to the
+audit's list so it is measured on every run from here.
+
+**Seeding a browser harness raced the app's own first save.** Writing
+localStorage into an already-running app competes with the blank starting season
+it writes on boot, and whichever lands last wins — which is why the league
+harness failed intermittently showing first-run setup. Both new harnesses now
+inject on the new document, before any of the app's scripts run, and remove the
+injection afterwards so later reloads are the app's own.
+
+**`roles-check.mjs`'s fixture created a team directly inside a league its
+manager had never joined** — precisely what the new guard stops. The fixture now
+creates the team outside and places it with the service key, as it already did
+on the next line.
+
+---
+
+## 4. Unfinished, and what to watch
+
+**The first thing to fix, and it is not close.** The season screen's opponent
+picker still works in **device-side slugs** (`rubber-chickens`), while a league
+is made of real account teams. `save_game` resolves the opponent by matching
+that slug against teams the user is a member of, so a game scored the normal way
+resolves to a team **outside** the league — and therefore does not land in the
+league table. Concretely: you can schedule a league fixture, and you can score a
+game, and those are two unconnected acts. Until the opponent picker can choose a
+league team, the table only fills from games written with both league teams on
+them. Everything else in 4c is built and verified; this is the wire that is not
+connected.
+
+The shape of the fix is a "score this fixture" action on a league fixture, which
+starts the game with the fixture's `client_id` and the opposing **team id**
+rather than a slug. `start_live_game` and `save_game` already do the right thing
+once given one.
+
+Also outstanding:
+
+- **No way to see or revoke a league's outstanding codes.** Same gap the team
+  invites have had since 2c. A code is shown once and never again.
+- **No UI for making a league private.** The column, the policies and the
+  behaviour are all there and tested; nothing on a screen sets it. Given §2's
+  note about public games, this is the second thing I would add.
+- **A commissioner cannot remove somebody else's team from their league.** Only
+  the team's own manager can leave. Deliberate for now — the alternative needs a
+  conversation about who owns a place in a table — but a league will eventually
+  need it.
+- **A league admin's controls on a member team** are hidden when they hold an
+  explicit non-manager membership on it. See §2.
+- **Leaders show five players and four stats**, with no way to see more.
+- **The league screen re-reads on open; there is no realtime on it.** A fixture
+  added by the commissioner appears on the other phone when it next opens the
+  league, not immediately. Correct for a calendar; wrong later for 5c.
+- **Nothing reconciles sports across a league.** A league has a sport and so does
+  a team; nothing checks they agree.
+- **Opposing teams in the SEASON view still carry no `priorT`** — pre-existing,
+  noted in `seasonMapping`, and untouched here. The LEAGUE table reads each
+  team's own `prior_t` from its row and is unaffected.
+
+---
+
+## 5. New migrations — LOCAL ONLY, all three pending
+
+None has been applied to any hosted project by this session; the hosted project
+was not contacted at all. `npx supabase migration list --linked` is the only
+authority on what is actually pending there — as far as this repo knows, `_014`
+through `_021` have never been pushed.
+
+| Migration | What it does | Risk |
+|---|---|---|
+| `20260101000019_leagues` | Adds `create_league_invite`, `join_league`, `schedule_game`, two guard triggers on `teams`; **replaces `peek_invite`** | **Touches a live function.** `peek_invite` is dropped and recreated at the same signature with extra columns; existing callers read `team_name`, which is still there. The triggers are new refusals — see below |
+| `20260101000020_shared_lineup` | Adds `players.lineup_order` and `players.on_bench`; **replaces `save_season`** | **Touches a live function.** Same signature, same guards, two more columns on the way through. A payload with no `lineup` key leaves the order alone, so an old client is unaffected |
+| `20260101000021_games_know_their_league` | Adds `shared_league`; **replaces `save_game` and `start_live_game`** | **Touches two live functions.** Both keep their exact signatures. The only change is `league_id` being set when both teams share a league |
+
+**The one behaviour change to know about before pushing `_019`:** the triggers
+refuse to put a team into a league nobody invited you to. If anything in the
+hosted project currently sets `teams.league_id` by a plain update from a
+signed-in user who is not a league member, it will start failing by name. In
+this repo nothing did — that path did not exist — but it is the one thing that
+could surprise.
+
+After pushing, the check that matters is the overload one, since two of these
+replace functions:
+
+```sql
+select proname, pg_get_function_arguments(oid) from pg_proc
+  where proname in ('save_season','save_game','peek_invite','start_live_game');
+```
+
+**Exactly one row each.** Two rows for one name means an old overload survived
+and calls may be resolving to the wrong one, which is how `_012` silently failed
+the first time.
+
+---
+
+## 6. Deploy order
+
+**Migrations first.** The opposite of phase 3's reasoning but the same
+principle: deploy whichever side fails safely if the other is missing.
+
+- **Migrations without the new code: nothing breaks.** `peek_invite` returns
+  extra columns the old client ignores. `save_season` leaves the order alone
+  when the payload does not mention it, which an old client never does.
+  `save_game` and `start_live_game` set a column nothing yet reads.
+- **Code without the migrations: the league screen fails on every action.**
+  Start a league, mint a code, join, schedule — each is a direct RPC call, not a
+  queued write, so it errors on screen with "function not found" and nothing is
+  retried or recovered.
+
+So:
+
+1. **Export the season from the phone first.** As always.
+2. **`npx supabase db push`** — applies everything the remote has not seen, in
+   order. Do not cherry-pick: `_021` replaces functions that `_019` and `_020`
+   assume the shape of.
+3. **Run the overload check in §5.** Four names, one row each.
+4. **Then push the code** (`git push` — this session pushed nothing, and the
+   work is on `phase-4`, not `main`).
+5. **First thing to try after deploying:** open Leagues, start one, and bring
+   your own team in. If "Bring my team into this league" fails, `_019` did not
+   apply.
+
+**If you would rather not deploy this yet: don't.** Nothing in phase 4 is needed
+to score a game, and every existing path is unchanged — the roster, the season,
+the live game and the finalise all behave exactly as they did, which is what the
+five pre-existing browser harnesses re-running unchanged is evidence for.
+
+---
 # Report — phase 3, live shared scoring (3a, 3b, 3c, 3d)
 
 All four slices built and green. **1044 assertions across 33 suites, build
@@ -929,10 +1272,16 @@ lost or reinstalled phone, and it needs none of the machinery below.
 
 | Slice | Description | Status |
 |---|---|---|
-| 4a | League admin: create league, add teams, set schedule | todo |
-| 4b | Team manager: own roster and lineup only | todo |
-| 4c | League-wide standings and leaders across all tracked games | todo |
-| 4d | Manual record adjustments still per team | todo |
+| 4a | League admin: create league, add teams, set schedule | **green** (D14) |
+| 4b | Team manager: own roster and lineup only | **green** (D16) |
+| 4c | League-wide standings and leaders across all tracked games | **green** (D15) |
+| 4d | Manual record adjustments still per team | **green** |
+
+A team joins a league by redeeming its code, which is also what lets it be put
+there at all — see D14. The season screen's own opponent picker still works in
+device-side slugs and is NOT connected to league teams, so a game scored there
+does not land in the league table. That is the first thing to fix; see the
+report at the top.
 
 ## Phase 5 — Public / spectator views
 
@@ -1205,6 +1554,88 @@ phones converging), `live-events-check.mjs` (the database half, including the
 concurrent burst and the no-lease turn-taking), and `browser-two-phones.mjs`
 (two real browsers, two accounts, one game, including a phone scoring through a
 loss of signal and converging when it returns).
+
+### D14 — A team enters a league by invitation, and leaves whenever it likes
+
+**The hole this closes.** `teams_update_manager_or_admin` admits a team's own
+manager for every column, and `league_id` was one of them. Anyone managing a
+team could set it to any league id they could see — and a league is public by
+default — so a stranger's team could appear in your standings uninvited. Not a
+crash: a table that is quietly wrong, which is worse.
+
+**The rule.** A team can only be put into a league the caller already holds a
+membership on, enforced by a trigger on `teams` rather than by any one function,
+so there is one answer however the row is written. Redeeming the league's code
+is what grants that membership, which makes the code the way in.
+
+Leaving is deliberately unrestricted. A manager can take their team out of a
+league at any time without anyone's permission — leaving is not a favour to be
+granted, and a league that can hold a team hostage is worse than one that loses
+one. The membership survives, so they can come back with no new code.
+
+`service_role` is exempt, matching row-level security: the seed and migration
+paths have no `auth.uid()` and already bypass RLS, so this must not be stricter
+than RLS is.
+
+**Joining is one transaction.** `join_league` redeems the code and places the
+team together. Either half alone is a mess: a membership without the team leaves
+someone in a league their team is not in, with no obvious way to finish; the
+team without the membership is refused by the trigger.
+
+**And one case that had to be handled rather than dead-ended on.**
+`accept_invite` refuses a second membership for the same scope — correctly,
+there is nothing left to grant — which blocked a manager bringing a SECOND team
+into a league they were already in. `join_league` now skips the grant in that
+case and places the team anyway, and deliberately does not burn the code: it
+granted nothing, so it is still somebody else's way in. This confers no reach,
+because a league member can already move a team they manage into that league
+with a plain update.
+
+### D15 — A game belongs to a league only when both teams do, and that makes it public
+
+Nothing the app wrote ever set `games.league_id`. A fixture created by
+`schedule_game` carried one; a game actually SCORED did not. A league table
+built from league games would therefore have been permanently empty however many
+were played in it — the rows existed and were simply filed nowhere the league
+could see.
+
+`save_game` and `start_live_game` now file a game under the league both teams
+are in. The rule is narrow on purpose: one team in a league and one outside it
+is a friendly, not a fixture, and filing it under the league would put a result
+in a table against a team the table does not contain.
+
+**The consequence, stated plainly rather than discovered later.**
+`games_select_visible` admits anyone for whom `league_is_readable(league_id)` is
+true, and a league is public by default (D3). So scoring a game between two
+teams in a public league makes that game — and its box score — readable by
+anyone, signed in or not. That is what a league is: a table other people look
+at. A league whose games should not be public is set to private, which the
+column already supports and RLS already enforces. There is no UI for that toggle
+yet, which is in the report's unfinished list.
+
+### D16 — The batting order is shared, and saying nothing about it is not saying "empty"
+
+The account held the roster but not the ORDER — who is in the lineup, in what
+sequence, and who is on the bench. That was fine while one person scored. It is
+not fine with two, and the reason is sharper than tidiness: the order decides
+who is at the plate, and who is at the plate decides whose stat line a play is
+written to. Two phones disagreeing about the order do not disagree cosmetically;
+they file the same double against two different players and tell nobody.
+
+Phase 3 covered the live case — the `start` event carries the lineup, so
+everyone replaying one game agrees within it. What it did not cover is the gap
+BETWEEN games, which is where the order is actually set.
+
+`players.lineup_order` and `players.on_bench` now carry it, and `save_season`
+writes them.
+
+**The guard that matters more than the feature.** A payload that says nothing
+about the order leaves the recorded order alone. A client too old to know about
+lineups sends a roster with no `lineup` key at all, and reading that as "nobody
+is in the order" would wipe a real batting order from the account every single
+time such a phone saved — silently, and repeatedly. An absence is not an
+instruction. This is the same lesson as the empty roster in `_012`, and it has
+its own test. An EXPLICITLY empty order is different, and is obeyed.
 
 ### D3 — League visibility is a column, not an assumption
 

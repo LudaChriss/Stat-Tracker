@@ -67,8 +67,15 @@ Write the script to a file and run the file.
   `npm test` still passes on a machine with no Docker.
 - Browser harnesses are run by hand, not by `npm test`: `browser-save-game.mjs`,
   `browser-backfill.mjs`, `browser-session.mjs`, `browser-parked.mjs`,
-  `browser-invites.mjs`, `browser-two-phones.mjs`. Each needs a dev server on
-  :5173 and Chrome on `--remote-debugging-port=9222`.
+  `browser-invites.mjs`, `browser-two-phones.mjs`, `browser-leagues.mjs`,
+  `browser-team-switch.mjs`. Each needs a dev server on :5173 and Chrome on
+  `--remote-debugging-port=9222`.
+- A harness that seeds localStorage must do it with
+  `Page.addScriptToEvaluateOnNewDocument` and then remove the script, NOT by
+  writing into an already-running app. The app writes its own blank starting
+  season on boot, so a `Runtime.evaluate` write races it and whichever lands
+  last wins — which shows up as the app sitting on first-run setup, at random,
+  for reasons that have nothing to do with the change under test.
 - `browser-two-phones.mjs` opens **two private browser contexts** so the two
   phones have genuinely separate localStorage and separate network conditions —
   two tabs on one origin share storage and would prove nothing. It disposes both
