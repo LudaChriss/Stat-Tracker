@@ -38,6 +38,10 @@ const SCREENS = [
   ['roster',     { ...withGame, screen: 'roster' }],
   ['teams',      { ...withGame, screen: 'teams' }],
   ['teamDetail', { ...withGame, screen: 'teamDetail', editTeamId: 'rubber-chickens' }],
+  // Signed out, so the league screen measures its "leagues need an account"
+  // state without waiting on a network round trip. The signed-in states of
+  // this screen are measured by hand in browser-leagues.mjs.
+  ['leagues',    { ...withGame, screen: 'leagues' }],
 ];
 
 const t=(await (await fetch('http://localhost:9222/json')).json()).find(x=>x.type==='page');

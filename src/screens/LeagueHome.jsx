@@ -30,25 +30,46 @@ export default function LeagueHome({ v, actions }) {
               {v.leagueTitle}
             </div>
           </div>
-          <button
-            onClick={actions.goRoster}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              background: 'rgba(255,255,255,.14)',
-              border: '1px solid rgba(255,255,255,.25)',
-              color: '#fff',
-              borderRadius: 99,
-              padding: '0 14px',
-              minHeight: 44,
-              fontSize: 12,
-              fontWeight: 700,
-              ...btn,
-            }}
-          >
-            Manage
-          </button>
+          <div style={{ display: 'flex', gap: 6, flex: '0 0 auto' }}>
+            <button
+              onClick={actions.goLeagues}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                background: 'rgba(255,255,255,.14)',
+                border: '1px solid rgba(255,255,255,.25)',
+                color: '#fff',
+                borderRadius: 99,
+                padding: '0 12px',
+                minHeight: 44,
+                fontSize: 12,
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                ...btn,
+              }}
+            >
+              Leagues
+            </button>
+            <button
+              onClick={actions.goRoster}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                background: 'rgba(255,255,255,.14)',
+                border: '1px solid rgba(255,255,255,.25)',
+                color: '#fff',
+                borderRadius: 99,
+                padding: '0 14px',
+                minHeight: 44,
+                fontSize: 12,
+                fontWeight: 700,
+                ...btn,
+              }}
+            >
+              Manage
+            </button>
+          </div>
         </div>
 
         {v.notSynced && (

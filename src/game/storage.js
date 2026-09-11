@@ -44,6 +44,7 @@ const TRANSIENT = {
 
 const RESUMABLE_SCREENS = [
   'league', 'team', 'newgame', 'live', 'player', 'roster', 'teams', 'teamDetail', 'gameDetail',
+  'leagues',
 ];
 
 /**

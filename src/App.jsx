@@ -15,6 +15,7 @@ import RosterEditor from './screens/RosterEditor.jsx';
 import TeamsEditor from './screens/TeamsEditor.jsx';
 import TeamDetail from './screens/TeamDetail.jsx';
 import GameDetail from './screens/GameDetail.jsx';
+import Leagues from './screens/Leagues.jsx';
 import TabBar from './components/TabBar.jsx';
 import Toast from './components/Toast.jsx';
 import { NameSheet } from './components/ResetSheets.jsx';
@@ -28,6 +29,8 @@ import { ROLE_LABEL } from './data/invites.js';
 import JoinTeamSheet from './components/JoinTeamSheet.jsx';
 import SignOutSheet from './components/SignOutSheet.jsx';
 import { useSignInForm } from './data/useSignInForm.js';
+import { useLeagues } from './data/useLeagues.js';
+import { getSupabase } from './data/supabaseClient.js';
 
 const SCREENS = {
   league: LeagueHome,
@@ -41,6 +44,7 @@ const SCREENS = {
   teams: TeamsEditor,
   teamDetail: TeamDetail,
   gameDetail: GameDetail,
+  leagues: Leagues,
 };
 
 // Screens that paint their own dark chrome need the status bar in white.
@@ -74,7 +78,7 @@ function useFullBleed() {
   return installed || iosStandalone || narrow;
 }
 
-function GameApp({ repository, backend, onSignIn, onSignOut, parked, onOpenParked, onInvite, onJoin }) {
+function GameApp({ repository, backend, leagues, onSignIn, onSignOut, parked, onOpenParked, onInvite, onJoin }) {
   const { state, actions } = useGame(repository);
   const v = useMemo(() => deriveView(state, actions), [state, actions]);
 
@@ -110,7 +114,11 @@ function GameApp({ repository, backend, onSignIn, onSignOut, parked, onOpenParke
             // Only a manager. The database refuses anyone else, so offering it
             // more widely would just be a button that fails.
             canInvite: backend.role === 'team_manager',
+            // Which team in the account this device is looking at. The league
+            // screen needs it to say "yours" and to know what it can bring in.
+            teamId: backend.teamId || null,
           },
+          leagues,
         }}
         actions={{ ...actions, openSignOut: onSignOut, openSignIn: onSignIn, openInvite: onInvite, openJoin: onJoin }}
       />
@@ -165,6 +173,11 @@ export default function App() {
   const [showParked, setShowParked] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
+  // Leagues live beside the season rather than inside it: one account can be in
+  // several, and none of them is needed to score a game. Nothing is fetched
+  // until the screen is opened.
+  const leagues = useLeagues(getSupabase(), { getTeamId: () => backend.teamId || null });
+
   const repository = backend.repository;
   useEffect(() => {
     if (!repository || !repository.parkedWrites) {
@@ -204,6 +217,7 @@ export default function App() {
         key={repoKey}
         repository={backend.repository}
         backend={backend}
+        leagues={leagues}
         onSignIn={() => setShowSignIn(true)}
         onSignOut={() => setSignOutSheet(backend.actions.unsentWrites())}
         parked={parked}

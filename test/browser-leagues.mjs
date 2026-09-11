@@ -1,0 +1,479 @@
+// Leagues, driven through the real screens in real browsers.
+//
+// The database half is leagues-check.mjs. This is the half that cannot be
+// argued: a commissioner starts a league, brings their own team in, and hands
+// out a code; a manager on another phone types that code and their team lands
+// in the same league; the commissioner puts a fixture on the calendar and the
+// manager sees it.
+//
+// Two browser contexts, so the two phones have genuinely separate localStorage
+// and separate sessions. Two tabs on one origin share storage and would prove
+// nothing.
+//
+// Manual harness. Needs:
+//   * the local Supabase stack   (npx supabase start --ignore-health-check)
+//   * a dev server on :5173      (npm run dev)
+//   * Chrome on :9222            (--remote-debugging-port=9222)
+// Never runs against the hosted project: it creates users, leagues and teams.
+
+import { execSync } from 'node:child_process';
+import { createClient } from '@supabase/supabase-js';
+
+const SRC = new URL('../src', import.meta.url).pathname;
+const repoRoot = new URL('..', import.meta.url).pathname;
+const APP = 'http://localhost:5173';
+
+let fail = 0;
+const eq = (label, got, want) => {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) {
+    fail++;
+    console.log(`FAIL ${label}\n  got  ${JSON.stringify(got)}\n  want ${JSON.stringify(want)}`);
+  } else console.log('ok   ' + label);
+};
+const ok = (label, cond, detail) => {
+  if (cond) console.log('ok   ' + label);
+  else {
+    fail++;
+    console.log(`FAIL ${label}${detail ? '\n  ' + detail : ''}`);
+  }
+};
+const need = (what, cond, detail) => {
+  if (!cond) {
+    console.log(`\nCANNOT RUN: ${what}${detail ? '\n  ' + detail : ''}`);
+    process.exit(2);
+  }
+};
+
+// ---- preflight ---------------------------------------------------------------
+let st;
+try {
+  st = JSON.parse(
+    execSync('npx supabase status -o json', { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString(),
+  );
+} catch (e) {
+  need('the local Supabase stack must be running', false, String(e.message).split('\n')[0]);
+}
+need('the app must be built against the LOCAL stack', st.API_URL.includes('127.0.0.1'), st.API_URL);
+
+let devOk = false;
+try {
+  devOk = (await fetch(APP, { signal: AbortSignal.timeout(3000) })).ok;
+} catch { /* reported below */ }
+need(`a dev server must be serving ${APP} (npm run dev)`, devOk);
+
+let browserWsUrl;
+try {
+  const version = await (await fetch('http://localhost:9222/json/version', { signal: AbortSignal.timeout(3000) })).json();
+  browserWsUrl = version.webSocketDebuggerUrl;
+} catch { /* reported below */ }
+need('Chrome must be running with --remote-debugging-port=9222', !!browserWsUrl);
+
+const admin = createClient(st.API_URL, st.SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+
+// ---- two accounts, and the session blobs their browsers will accept ----------
+const password = 'Password123!';
+const stamp = `${Date.now()}${Math.random().toString(36).slice(2, 5)}`;
+
+async function account(tag) {
+  const email = `lgui${tag}${stamp}@example.test`;
+  const made = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  need(`the ${tag} account could be created`, !made.error, made.error && made.error.message);
+
+  const captured = {};
+  const client = createClient(st.API_URL, st.ANON_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: false,
+      storage: {
+        getItem: (k) => (k in captured ? captured[k] : null),
+        setItem: (k, v) => { captured[k] = v; },
+        removeItem: (k) => { delete captured[k]; },
+      },
+    },
+  });
+  const signIn = await client.auth.signInWithPassword({ email, password });
+  need(`the ${tag} account could sign in`, !signIn.error, signIn.error && signIn.error.message);
+  const key = Object.keys(captured).find((k) => k.startsWith('sb-'));
+  need('supabase-js wrote a session to storage', !!key);
+  return { id: signIn.data.user.id, client, authKey: key, authValue: captured[key] };
+}
+
+const boss = await account('boss');   // runs the league, and manages a team
+const mgr = await account('mgr');     // manages another team
+
+// ---- CDP, multiplexed over one browser connection ----------------------------
+const ws = new WebSocket(browserWsUrl);
+await new Promise((r) => ws.addEventListener('open', r));
+
+let msgId = 0;
+const pending = new Map();
+const logs = new Map();
+ws.addEventListener('message', (e) => {
+  const m = JSON.parse(e.data);
+  if (m.id && pending.has(m.id)) {
+    pending.get(m.id)(m);
+    pending.delete(m.id);
+    return;
+  }
+  if (!m.sessionId) return;
+  const bucket = logs.get(m.sessionId);
+  if (!bucket) return;
+  if (m.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(m.params.type)) {
+    bucket.push(m.params.type + ': ' + m.params.args.map((a) => String(a.value ?? a.description ?? '').slice(0, 90)).join(' § '));
+  }
+  if (m.method === 'Runtime.exceptionThrown') {
+    bucket.push('uncaught: ' + (m.params.exceptionDetails.exception?.description || '').split('\n')[0]);
+  }
+});
+
+const raw = (method, params = {}, sessionId) =>
+  new Promise((res, rej) => {
+    const i = ++msgId;
+    pending.set(i, (x) => (x.error ? rej(new Error(method + ' ' + JSON.stringify(x.error))) : res(x.result)));
+    ws.send(JSON.stringify({ id: i, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const until = async (fn, ms = 20000, step = 250) => {
+  const started = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - started > ms) return null;
+    await sleep(step);
+  }
+};
+
+const contexts = [];
+async function phone(name) {
+  const { browserContextId } = await raw('Target.createBrowserContext', {});
+  contexts.push(browserContextId);
+  const { targetId } = await raw('Target.createTarget', { url: 'about:blank', browserContextId });
+  const { sessionId } = await raw('Target.attachToTarget', { targetId, flatten: true });
+  logs.set(sessionId, []);
+
+  const send = (method, params) => raw(method, params, sessionId);
+  await send('Page.enable');
+  await send('Runtime.enable');
+  await send('Network.enable');
+  await send('Emulation.setDeviceMetricsOverride', { width: 393, height: 852, deviceScaleFactor: 2, mobile: false });
+
+  const js = async (expression) => {
+    const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (r.exceptionDetails) return { ERR: (r.exceptionDetails.exception?.description || '').split('\n')[0] };
+    return r.result.value;
+  };
+
+  const self = {
+    name,
+    send,
+    js,
+    logs: () => logs.get(sessionId),
+    put: (k, v) => js(`localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)}), 1`),
+    get: (k) => js(`localStorage.getItem(${JSON.stringify(k)})`),
+    goto: (url) => send('Page.navigate', { url }),
+    reload: () => send('Page.reload'),
+    text: () => js(`document.body.textContent.replace(/\\s+/g,' ').trim()`),
+    state: async () => {
+      const stored = await js(`localStorage.getItem('score-tracker:state')`);
+      try { return JSON.parse(stored).state; } catch { return null; }
+    },
+  };
+
+  /** Tap whatever is showing this text — controls win over containers. */
+  self.tap = async (text, ms = 12000) => {
+    const hit = await until(() =>
+      js(`(() => {
+        const want = ${JSON.stringify(text)};
+        const norm = (e) => (e.textContent || '').replace(/\\s+/g, ' ').trim();
+        const matches = [...document.querySelectorAll('body *')].filter(
+          (e) => norm(e).includes(want) && e.getBoundingClientRect().width > 0,
+        );
+        const clickable = matches.filter((e) => e.matches('button,[role=button]'));
+        const pool = clickable.length ? clickable : matches;
+        const el = pool.find((e) => !pool.some((o) => o !== e && e.contains(o)));
+        if (!el) return null;
+        el.click();
+        return 'OK';
+      })()`), ms);
+    if (hit) return 'OK';
+    return `MISS "${text}" — on screen: ` + String(await self.text()).slice(0, 200);
+  };
+
+  /** Type into the first visible input matching a placeholder or type. */
+  self.type = async (selector, value) => {
+    return js(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return 'MISS';
+      const setter = Object.getOwnPropertyDescriptor(
+        el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : el.constructor.prototype, 'value').set;
+      setter.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return 'OK';
+    })()`);
+  };
+
+  return self;
+}
+
+const A = await phone('phone A');
+const B = await phone('phone B');
+
+const { INITIAL_STATE } = await import(`${SRC}/data/league.js`);
+const { SEEDED } = await import('./fixtures-history.js');
+const seeded = SEEDED(INITIAL_STATE);
+
+const boot = async (p, acct, teamName) => {
+  await p.goto('about:blank');
+  await sleep(200);
+  await p.send('Storage.clearDataForOrigin', { origin: APP, storageTypes: 'all' });
+  await p.goto(APP);
+  // Wait for the APP's document, not merely for "a document": about:blank is
+  // complete the instant it is asked, and seeding localStorage against it puts
+  // the session somewhere the app will never look.
+  await until(
+    () => p.js(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete' ? 1 : null`),
+    20000,
+  );
+  await p.put(acct.authKey, acct.authValue);
+  await p.put('score-tracker:state', JSON.stringify({
+    version: 3,
+    state: { ...seeded, myTeam: { ...seeded.myTeam, name: teamName }, history: [] },
+  }));
+  // The app writes its own state on every change, so the seed has to be the
+  // thing that survives the reload — not merely the thing that was written
+  // last. Check, rather than assume.
+  await p.reload();
+  const seeded$ = await until(async () => {
+    const s = await p.state();
+    return s && s.myTeam && s.myTeam.name === teamName ? s : null;
+  }, 20000);
+  if (!seeded$) return null;
+
+  const team = await until(async () => {
+    const r = await admin.from('teams').select('*').eq('created_by', acct.id);
+    return (r.data || []).find((t) => t.name === teamName) || null;
+  }, 40000);
+  return team;
+};
+
+const bossTeam = await boot(A, boss, `Boss United ${stamp}`);
+if (!bossTeam) {
+  console.log('  A keys  : ' + JSON.stringify(await A.js(`Object.keys(localStorage)`)));
+  console.log('  A screen: ' + String(await A.text()).slice(0, 300));
+  console.log('  A teams : ' + JSON.stringify((await admin.from('teams').select('name').eq('created_by', boss.id)).data));
+}
+ok('phone A signed in and its season reached the account', !!bossTeam,
+  'page said: ' + (A.logs().join(' | ') || 'nothing'));
+need('a team for phone A', !!bossTeam);
+
+const mgrTeam = await boot(B, mgr, `Manager City ${stamp}`);
+ok('phone B signed in and its season reached the account', !!mgrTeam,
+  'page said: ' + (B.logs().join(' | ') || 'nothing'));
+need('a team for phone B', !!mgrTeam);
+
+// =============================================================================
+console.log('\n--- phone A starts a league -----------------------------------');
+// =============================================================================
+
+eq('A: opened the leagues screen', await A.tap('Leagues'), 'OK');
+ok('it says there are none yet',
+  !!(await until(async () => ((await A.text()) || '').includes('not in a league yet') ? 1 : null, 15000)),
+  'on screen: ' + String(await A.text()).slice(0, 200));
+
+eq('A: opened the create form', await A.tap('Start a league'), 'OK');
+eq('A: named it', await A.type('input[placeholder="Thursday Night Kickball"]', `Sunday Social ${stamp}`), 'OK');
+eq('A: created it', await A.tap('Create it'), 'OK');
+
+const leagueRow = await until(async () => {
+  const r = await admin.from('leagues').select('*').eq('name', `Sunday Social ${stamp}`);
+  return (r.data || [])[0] || null;
+}, 25000);
+ok('the league exists in the account', !!leagueRow, 'page said: ' + (A.logs().join(' | ') || 'nothing'));
+need('a league', !!leagueRow);
+
+{
+  const { data } = await admin.from('memberships').select('role, user_id').eq('league_id', leagueRow.id);
+  eq('and its creator is its commissioner', (data || []).map((m) => [m.user_id === boss.id, m.role]), [[true, 'league_admin']]);
+}
+
+ok('A lands on the league it just made',
+  !!(await until(async () => ((await A.text()) || '').includes('Commissioner') ? 1 : null, 15000)),
+  'on screen: ' + String(await A.text()).slice(0, 240));
+
+// =============================================================================
+console.log('\n--- A brings its own team in, and hands out a code -------------');
+// =============================================================================
+
+eq('A: brought its team in', await A.tap('Bring my team into this league'), 'OK');
+ok('the team is in the league',
+  !!(await until(async () => {
+    const { data } = await admin.from('teams').select('league_id').eq('id', bossTeam.id).single();
+    return data && data.league_id === leagueRow.id ? 1 : null;
+  }, 25000)));
+ok('and the screen says so',
+  !!(await until(async () => ((await A.text()) || '').includes('YOURS') ? 1 : null, 15000)),
+  'on screen: ' + String(await A.text()).slice(0, 240));
+
+eq('A: opened the invite form', await A.tap('Invite someone to this league'), 'OK');
+eq('A: minted a code', await A.tap('Make a code'), 'OK');
+
+const inviteRow = await until(async () => {
+  const r = await admin.from('invites').select('*').eq('league_id', leagueRow.id).order('created_at', { ascending: false });
+  return (r.data || [])[0] || null;
+}, 25000);
+ok('a league code was minted', !!inviteRow);
+need('a code', !!inviteRow);
+eq('scoped to the league, not a team', [inviteRow.league_id === leagueRow.id, inviteRow.team_id], [true, null]);
+eq('granting the role that was picked', inviteRow.role, 'viewer');
+
+ok('and it is shown on screen, once',
+  String(await A.text()).includes(inviteRow.code),
+  'code ' + inviteRow.code + ' not on screen: ' + String(await A.text()).slice(0, 300));
+
+// =============================================================================
+console.log('\n--- phone B types the code and brings its team in --------------');
+// =============================================================================
+
+eq('B: opened the leagues screen', await B.tap('Leagues'), 'OK');
+eq('B: opened the join form', await B.tap('I have a code'), 'OK');
+eq('B: typed the code', await B.type('input[placeholder="BQ7K-2M9X-RT"]', inviteRow.code), 'OK');
+eq('B: joined', await B.tap('Join'), 'OK');
+
+ok('B\'s team is now in the league',
+  !!(await until(async () => {
+    const { data } = await admin.from('teams').select('league_id').eq('id', mgrTeam.id).single();
+    return data && data.league_id === leagueRow.id ? 1 : null;
+  }, 30000)),
+  'page said: ' + (B.logs().join(' | ') || 'nothing'));
+
+{
+  const { data } = await admin
+    .from('memberships').select('role').eq('league_id', leagueRow.id).eq('user_id', mgr.id);
+  eq('and B holds a league membership', (data || []).map((m) => m.role), ['viewer']);
+  const { data: inv } = await admin.from('invites').select('used_by').eq('code', inviteRow.code).single();
+  eq('the code was spent by B', inv.used_by, mgr.id);
+}
+
+ok('B is looking at the league, as a follower',
+  !!(await until(async () => {
+    const t = (await B.text()) || '';
+    return t.includes('Follower') && t.includes(`Sunday Social ${stamp}`) ? 1 : null;
+  }, 20000)),
+  'on screen: ' + String(await B.text()).slice(0, 240));
+
+ok('and sees both teams in it',
+  !!(await until(async () => {
+    const t = (await B.text()) || '';
+    return t.includes(`Boss United ${stamp}`) && t.includes(`Manager City ${stamp}`) ? 1 : null;
+  }, 20000)),
+  'on screen: ' + String(await B.text()).slice(0, 300));
+
+ok('a follower is offered no commissioner controls',
+  !String(await B.text()).includes('Invite someone to this league'),
+  'on screen: ' + String(await B.text()).slice(0, 300));
+
+// =============================================================================
+console.log('\n--- A puts a fixture on the calendar --------------------------');
+// =============================================================================
+
+// Re-open so A sees the team that joined after its last read.
+eq('A: back to the list', await A.tap('‹ Back'), 'OK');
+eq('A: re-opened the league', await A.tap(`Sunday Social ${stamp}`), 'OK');
+ok('A sees both teams too',
+  !!(await until(async () => {
+    const t = (await A.text()) || '';
+    return t.includes(`Manager City ${stamp}`) ? 1 : null;
+  }, 20000)));
+
+eq('A: opened the schedule form', await A.tap('Schedule a game'), 'OK');
+const selects = await A.js(`document.querySelectorAll('select').length`);
+eq('two team pickers are offered', selects, 2);
+eq('A: picked home', await A.type('select', bossTeam.id), 'OK');
+eq('A: picked away', await A.js(`(() => {
+  const el = document.querySelectorAll('select')[1];
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+  setter.call(el, ${JSON.stringify(mgrTeam.id)});
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return 'OK';
+})()`), 'OK');
+eq('A: added it', await A.tap('Add to the schedule'), 'OK');
+
+const fixture = await until(async () => {
+  const r = await admin.from('games').select('*').eq('league_id', leagueRow.id).eq('status', 'scheduled');
+  return (r.data || [])[0] || null;
+}, 25000);
+ok('the fixture is on the calendar', !!fixture, 'page said: ' + (A.logs().join(' | ') || 'nothing'));
+need('a fixture', !!fixture);
+eq('between the two teams', [fixture.home_team_id, fixture.away_team_id], [bossTeam.id, mgrTeam.id]);
+eq('scheduled, not played', fixture.status, 'scheduled');
+eq('and it has no result', fixture.result, null);
+
+ok('A sees it on the schedule',
+  !!(await until(async () => {
+    const t = (await A.text()) || '';
+    return t.includes('Schedule · 1') ? 1 : null;
+  }, 20000)),
+  'on screen: ' + String(await A.text()).slice(0, 300));
+
+// B sees it too, once it looks again. A fixture is not live data; it does not
+// need a socket.
+eq('B: back to the list', await B.tap('‹ Back'), 'OK');
+eq('B: re-opened the league', await B.tap(`Sunday Social ${stamp}`), 'OK');
+ok('B sees the fixture the commissioner made',
+  !!(await until(async () => {
+    const t = (await B.text()) || '';
+    return t.includes('Schedule · 1') && t.includes(`Boss United ${stamp} vs Manager City ${stamp}`) ? 1 : null;
+  }, 25000)),
+  'on screen: ' + String(await B.text()).slice(0, 320));
+
+// =============================================================================
+console.log('\n--- leaving is never a favour ---------------------------------');
+// =============================================================================
+
+eq('B: left the league', await B.tap('Leave this league'), 'OK');
+ok('B\'s team is out',
+  !!(await until(async () => {
+    const { data } = await admin.from('teams').select('league_id').eq('id', mgrTeam.id).single();
+    return data && data.league_id === null ? 1 : null;
+  }, 25000)));
+{
+  const { data } = await admin
+    .from('memberships').select('role').eq('league_id', leagueRow.id).eq('user_id', mgr.id);
+  eq('but the membership is kept, so they can come back', (data || []).length, 1);
+}
+
+// ---- the season was never touched --------------------------------------------
+{
+  const a = await A.state();
+  const b = await B.state();
+  eq('phone A\'s season is untouched', [a.myTeam.name, a.roster.length], [`Boss United ${stamp}`, seeded.roster.length]);
+  eq('phone B\'s season is untouched', [b.myTeam.name, b.roster.length], [`Manager City ${stamp}`, seeded.roster.length]);
+  eq('and neither is mid-game', [a.gameActive, b.gameActive], [false, false]);
+}
+
+// ---- nothing fell over anywhere ----------------------------------------------
+for (const p of [A, B]) {
+  const crashed = await p.js(`!!document.body.textContent.match(/Something went wrong|TEMPLATES/)`);
+  eq(`${p.name} never fell into its error boundary`, crashed, false);
+  eq(`${p.name} logged nothing to the console at all`, p.logs(), []);
+}
+
+if (fail) {
+  console.log('\nphone A said: ' + (A.logs().join('\n              ') || 'nothing'));
+  console.log('phone B said: ' + (B.logs().join('\n              ') || 'nothing'));
+}
+
+for (const browserContextId of contexts) {
+  try {
+    await raw('Target.disposeBrowserContext', { browserContextId });
+  } catch {
+    /* already gone */
+  }
+}
+
+console.log(fail ? `\n${fail} FAILED` : '\nall passed');
+ws.close();
+process.exit(fail ? 1 : 0);

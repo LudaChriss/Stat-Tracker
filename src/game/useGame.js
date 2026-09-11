@@ -467,6 +467,10 @@ export function useGame(injectedRepository) {
       go,
       goTeam: go('team'),
       goLeague: go('league'),
+      // The leagues screen — several teams, one table. Not the season home,
+      // which is confusingly also called "league"; that one is this team's own
+      // standings and is what `goLeague` opens.
+      goLeagues: go('leagues'),
       goNewGame: go('newgame'),
       goScanCam: go('scanCam'),
 
