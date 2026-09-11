@@ -27,6 +27,7 @@ import ParkedWrites from './components/ParkedWrites.jsx';
 import InviteSheet from './components/InviteSheet.jsx';
 import { ROLE_LABEL } from './data/invites.js';
 import JoinTeamSheet from './components/JoinTeamSheet.jsx';
+import TeamSwitcher from './components/TeamSwitcher.jsx';
 import SignOutSheet from './components/SignOutSheet.jsx';
 import { useSignInForm } from './data/useSignInForm.js';
 import { useLeagues } from './data/useLeagues.js';
@@ -78,7 +79,7 @@ function useFullBleed() {
   return installed || iosStandalone || narrow;
 }
 
-function GameApp({ repository, backend, leagues, onSignIn, onSignOut, parked, onOpenParked, onInvite, onJoin }) {
+function GameApp({ repository, backend, leagues, onSignIn, onSignOut, parked, onOpenParked, onInvite, onJoin, onSwitchTeam }) {
   const { state, actions } = useGame(repository);
   const v = useMemo(() => deriveView(state, actions), [state, actions]);
 
@@ -114,13 +115,35 @@ function GameApp({ repository, backend, leagues, onSignIn, onSignOut, parked, on
             // Only a manager. The database refuses anyone else, so offering it
             // more widely would just be a button that fails.
             canInvite: backend.role === 'team_manager',
+            // Read from the database, never assumed. A scorer and a viewer see
+            // the same season; showing them controls row-level security will
+            // refuse is a button that only ever fails.
+            //
+            // Conservative on purpose in one direction: a LEAGUE admin can
+            // manage a team in their league (can_manage_team says so) but holds
+            // no team membership, so the role read here is null and the
+            // controls stay hidden. Hiding a control that would have worked is
+            // the harmless way round.
+            //
+            // Phrased as "hide only when we KNOW it is somebody else's team".
+            // A null role is every state that has always been able to edit —
+            // local-only, signed out, a session we cannot reach — and those
+            // must keep working exactly as they do.
+            canEditRoster: !backend.role || backend.role === 'team_manager',
             // Which team in the account this device is looking at. The league
             // screen needs it to say "yours" and to know what it can bring in.
             teamId: backend.teamId || null,
           },
           leagues,
         }}
-        actions={{ ...actions, openSignOut: onSignOut, openSignIn: onSignIn, openInvite: onInvite, openJoin: onJoin }}
+        actions={{
+          ...actions,
+          openSignOut: onSignOut,
+          openSignIn: onSignIn,
+          openInvite: onInvite,
+          openJoin: onJoin,
+          openTeamSwitch: onSwitchTeam,
+        }}
       />
       {v.needsSetup && (
         <NameSheet
@@ -170,6 +193,7 @@ export default function App() {
   const [parked, setParked] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  const [switchOpen, setSwitchOpen] = useState(false);
   const [showParked, setShowParked] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
@@ -224,7 +248,17 @@ export default function App() {
         onOpenParked={() => setShowParked(true)}
         onInvite={() => setInviteOpen(true)}
         onJoin={() => setJoinOpen(true)}
+        onSwitchTeam={() => setSwitchOpen(true)}
       />
+      {switchOpen && (
+        <TeamSwitcher
+          currentTeamId={backend.teamId}
+          unsent={backend.actions.unsentWrites()}
+          onList={() => backend.actions.myTeams()}
+          onSwitch={(id) => backend.actions.switchTeam(id)}
+          onClose={() => setSwitchOpen(false)}
+        />
+      )}
       {inviteOpen && (
         <InviteSheet
           teamName={v0TeamName(backend)}

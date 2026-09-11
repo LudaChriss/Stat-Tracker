@@ -27,6 +27,11 @@ export default function RosterEditor({ v, actions }) {
   // button; the tap has to originate from a real user gesture.
   const fileRef = useRef(null);
 
+  // A scorer and a viewer see the same season as the manager and have always
+  // been shown the same edit controls, which row-level security then refused.
+  // Safe, and ugly: a button that only ever fails is worse than no button.
+  const canEdit = !v.account || v.account.canEditRoster !== false;
+
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
       <div
@@ -48,24 +53,41 @@ export default function RosterEditor({ v, actions }) {
             {v.myTeamName} · {v.rosterCount} {v.rosterCount === 1 ? 'player' : 'players'}
           </div>
         </div>
-        <button
-          onClick={actions.openRename}
-          style={{
-            background: C.bg,
-            border: 'none',
-            borderRadius: 99,
-            padding: '0 15px',
-            minHeight: 42,
-            fontSize: 12.5,
-            fontWeight: 800,
-            color: C.header,
-            ...btn,
-          }}
-        >
-          Rename
-        </button>
+        {canEdit && (
+          <button
+            onClick={actions.openRename}
+            style={{
+              background: C.bg,
+              border: 'none',
+              borderRadius: 99,
+              padding: '0 15px',
+              minHeight: 44,
+              fontSize: 12.5,
+              fontWeight: 800,
+              color: C.header,
+              ...btn,
+            }}
+          >
+            Rename
+          </button>
+        )}
       </div>
 
+      {!canEdit && (
+        <div style={{ padding: '14px 16px 0' }}>
+          <Card style={{ padding: '11px 13px', background: '#FFF1D6', borderColor: C.amberLine }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>
+              This is somebody else's roster
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginTop: 2, lineHeight: 1.45 }}>
+              You are {v.account && v.account.roleLabel ? v.account.roleLabel.toLowerCase() : 'not a manager'} on
+              this team, so the players are theirs to change. Everything else here works as normal.
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {canEdit && (
       <div style={{ padding: '14px 16px 8px' }}>
         <button
           onClick={actions.openPlayerEditor(null, null)}
@@ -85,6 +107,7 @@ export default function RosterEditor({ v, actions }) {
           + Add player
         </button>
       </div>
+      )}
 
       <div style={{ padding: '8px 16px 20px' }}>
         {v.rosterCount === 0 ? (
@@ -99,14 +122,14 @@ export default function RosterEditor({ v, actions }) {
             {v.rosterEditRows.map((p) => (
               <div
                 key={p.key}
-                onClick={p.onEdit}
+                onClick={canEdit ? p.onEdit : undefined}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
                   padding: '10px 14px',
                   borderTop: `1px solid ${C.hair}`,
-                  cursor: 'pointer',
+                  cursor: canEdit ? 'pointer' : 'default',
                 }}
               >
                 <Avatar ini={p.ini} c={p.c} size={34} fs={13} />
@@ -117,7 +140,7 @@ export default function RosterEditor({ v, actions }) {
                   </span>
                 </span>
                 <span style={{ fontSize: 11.5, fontWeight: 800, color: C.teal, ...tnum }}>{p.season}</span>
-                <span style={{ color: C.edge, fontSize: 15, marginLeft: 4 }}>›</span>
+                {canEdit && <span style={{ color: C.edge, fontSize: 15, marginLeft: 4 }}>›</span>}
               </div>
             ))}
           </Card>
@@ -245,6 +268,9 @@ export default function RosterEditor({ v, actions }) {
                 )}
                 <button onClick={actions.openJoin} style={{ ...accountBtn, flex: 1 }}>
                   Join a team
+                </button>
+                <button onClick={actions.openTeamSwitch} style={{ ...accountBtn, flex: 1 }}>
+                  Switch team
                 </button>
               </div>
             )}

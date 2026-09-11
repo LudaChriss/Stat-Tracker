@@ -114,8 +114,20 @@ export function useBackend() {
   const makeRemote = useCallback(
     (teamId) => {
       teamIdRef.current = teamId;
+      // Each repository is bound to the team it was BUILT for.
+      //
+      // This used to read the shared ref instead, which was fine while a device
+      // only ever looked at one team. It is not fine once you can switch: a
+      // season write is debounced, so the previous team's repository still had
+      // a save in flight when the ref moved — and that save then resolved
+      // against the NEW team and wrote one team's roster into another team's
+      // row. Caught by browser-team-switch.mjs against a real database.
+      //
+      // The ref remains as the fallback for the case it was added for: a
+      // repository built before the team id is known.
+      const boundTeamId = teamId || null;
       return createSupabaseRepository(client, {
-        getTeamId: () => teamIdRef.current,
+        getTeamId: () => boundTeamId || teamIdRef.current,
         getUserId: () => userIdRef.current,
         cache: local,
       });
@@ -474,6 +486,50 @@ export function useBackend() {
       const remoteRepo = makeRemote(teamId);
       setState((s) => ({ ...s, status: 'ready', teamId, role, repository: remoteRepo, error: null }));
       return { role, teamName, switched: true };
+    },
+
+    /**
+     * Every team this account holds a role on, with that role.
+     *
+     * Read from memberships rather than from teams: a public league makes every
+     * team in it readable, and "teams I can see" is not the question. Only the
+     * ones you are actually on can be switched to.
+     */
+    myTeams: async () => {
+      const { data, error } = await client
+        .from('memberships')
+        .select('role, team_id, teams(id, name)')
+        .not('team_id', 'is', null);
+      if (error) return { teams: [], error };
+      const teams = (data || [])
+        .filter((m) => m.teams)
+        .map((m) => ({ id: m.teams.id, name: m.teams.name, role: m.role }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return { teams, error: null };
+    },
+
+    /**
+     * Look at a different team.
+     *
+     * The primary team is written to the profile, not merely to this device:
+     * it is what decides which season loads on the next launch, on any phone.
+     *
+     * Nothing local is deleted. The mirror is stamped with the team it belongs
+     * to, so the new team simply has no mirror yet and the app waits for the
+     * account rather than painting the previous team's roster under the new
+     * team's name — which is how one team's season would have been written into
+     * another team's row.
+     */
+    switchTeam: async (teamId) => {
+      if (!teamId || teamId === teamIdRef.current) return { error: null };
+      const claimed = await client.rpc('set_primary_team', { team_id: teamId });
+      if (claimed.error) return { error: claimed.error };
+
+      writeTeamId(teamId);
+      const remoteRepo = makeRemote(teamId);
+      const role = await resolveRole(teamId);
+      setState((s) => ({ ...s, status: 'ready', teamId, role, repository: remoteRepo, error: null }));
+      return { error: null };
     },
 
     /** What is still waiting to reach the account, so sign-out can warn. */

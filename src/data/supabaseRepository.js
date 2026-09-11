@@ -172,6 +172,27 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
   /** Whose writes these are. Null before a session is known. */
   const owner = () => (getUserId ? getUserId() : null);
 
+  /**
+   * The local mirror, but only if it is this team's.
+   *
+   * There is one mirror and an account can score for several teams. Handing
+   * back the previous team's season as this team's seed would paint the wrong
+   * roster and, far worse, mark the app hydrated — so the very next save would
+   * write one team's season into another team's row. A mirror belonging to
+   * somebody else is no mirror at all.
+   *
+   * A mirror written before this stamp existed has no team on it. Treated as
+   * this team's, which is what it was: there was only ever one.
+   */
+  function mirrorForThisTeam() {
+    if (!cache || !cache.loadSync) return null;
+    const mirrored = cache.loadSync();
+    if (!mirrored) return null;
+    const teamId = getTeamId();
+    if (mirrored.__teamId && teamId && mirrored.__teamId !== teamId) return null;
+    return mirrored;
+  }
+
   async function flushQueue() {
     const result = await writes.flush(handlers, { owner: owner() });
     lastError = writes.parked().length ? new Error('Some changes could not be saved') : null;
@@ -266,6 +287,11 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
       payload: {
         myTeam: state.myTeam,
         roster: state.roster,
+        // The batting order travels with the roster now. Who is at the plate
+        // decides whose stat line a play lands on, so two phones disagreeing
+        // about it is not a cosmetic disagreement.
+        lineup: state.lineup || [],
+        bench: state.bench || [],
       },
     });
     if (error) throw error;
@@ -521,41 +547,63 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
     // The local mirror reads synchronously, so the first paint shows the last
     // known season instead of a blank screen while the network load runs.
     // useGame replaces it with the authoritative copy when that arrives.
+    //
+    // Only if the mirror is THIS team's, though. There is one mirror and an
+    // account can score for several teams; handing back the last team's season
+    // as this team's seed would paint the wrong roster and — far worse — mark
+    // the app hydrated, so the next save would write one team's season into
+    // another team's row. A mirror belonging to somebody else is no mirror at
+    // all, and starting blank is the honest answer.
     loadSync() {
-      return cache && cache.loadSync ? cache.loadSync() : null;
+      return mirrorForThisTeam();
     },
 
     async load() {
       const teamId = getTeamId();
-      if (!teamId) return cache ? cache.loadSync?.() ?? null : null;
+      if (!teamId) return mirrorForThisTeam();
       try {
         const season = await fetchSeason(teamId);
         lastError = null;
-        if (!season) return cache ? cache.loadSync?.() ?? null : null;
+        if (!season) return mirrorForThisTeam();
 
         // The backend holds the SEASON — team, roster, opponents, history. It
         // does not hold this device's own state: which sport is selected, the
         // batting order, the bench, anything mid-game. Returning the season
         // slice alone would replace the whole app state with a fragment and
         // leave, for example, no sport selected at all.
-        const base = (cache && cache.loadSync && cache.loadSync()) || {};
+        const base = mirrorForThisTeam() || {};
         // History is merged rather than replaced: the account is authoritative
         // for every game it knows about, and silent about the ones it does not.
         const merged = { ...base, ...season, history: mergeHistory(base.history, season.history) };
 
         // Mirror locally so the next cold start works with no signal.
-        if (cache) cache.save({ ...merged, __mirroredAt: Date.now() });
+        // Stamped with the team it belongs to, which is what makes the guard
+        // above able to tell.
+        if (cache) cache.save({ ...merged, __mirroredAt: Date.now(), __teamId: teamId });
         return merged;
       } catch (err) {
         lastError = err;
         // Offline or unreachable: fall back to the local mirror rather than
         // presenting an empty season, which would look like data loss.
-        return cache ? cache.loadSync?.() ?? null : null;
+        return mirrorForThisTeam();
       }
     },
 
     save(state) {
-      if (cache) cache.save(state); // local mirror is always written first
+      // A season with no team name AND no players is the blank starting state,
+      // not an edit. It is what the app holds for the moment between switching
+      // to a team whose season has never been on this device and that season
+      // arriving. Writing it would send an empty roster at the account —
+      // save_season refuses that (migration _012), so nothing would be lost,
+      // but the refusal parks a write that says something alarming and means
+      // nothing. Say nothing instead.
+      const blank = !(state.myTeam && state.myTeam.name) && !(state.roster || []).length;
+      if (blank) return;
+
+      // The mirror is always written first — and always stamped, or the next
+      // save would strip the stamp that `mirrorForThisTeam` reads and hand one
+      // team's season to another as its seed.
+      if (cache) cache.save({ ...state, __teamId: getTeamId() });
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
         const teamId = getTeamId();

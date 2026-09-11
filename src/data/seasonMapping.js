@@ -301,7 +301,28 @@ export function rowsToSeason(rows, defaults = {}) {
 
   const toClientPlayer = (p) => ({ id: p.client_id, name: p.name, num: p.number, pos: p.position, c: p.color });
 
-  const roster = myTeamId ? sortByOrder(playersByTeam.get(myTeamId) || []).map(toClientPlayer) : [];
+  const myPlayers = myTeamId ? sortByOrder(playersByTeam.get(myTeamId) || []) : [];
+  const roster = myPlayers.map(toClientPlayer);
+
+  // The batting order, if the account has one.
+  //
+  // Omitted entirely — not returned empty — when no player carries a place.
+  // A season saved before the order was shared has none, and an absent order
+  // is not an empty one: returning [] would spread over whatever order the
+  // phone already had and leave nobody batting. The caller spreads this object
+  // over its own state, so a missing key is the only way to say "no opinion".
+  const ordered = myPlayers.filter((p) => p.lineup_order != null);
+  const lineupSlice = {};
+  if (ordered.length) {
+    lineupSlice.lineup = ordered
+      .slice()
+      .sort((a, b) => a.lineup_order - b.lineup_order)
+      .map((p) => p.client_id);
+    lineupSlice.bench = myPlayers
+      .filter((p) => p.lineup_order == null || p.on_bench)
+      .map((p) => p.client_id)
+      .filter((id) => !lineupSlice.lineup.includes(id));
+  }
 
   const teams = opponentTeams.map((t) => ({
     id: t.client_id,
@@ -365,5 +386,5 @@ export function rowsToSeason(rows, defaults = {}) {
     };
   });
 
-  return { myTeam, roster, teams, history };
+  return { myTeam, roster, teams, history, ...lineupSlice };
 }
