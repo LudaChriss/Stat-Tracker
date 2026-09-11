@@ -1,3 +1,130 @@
+# Report — phases 2b and 2c
+
+Built while you were away. **854 assertions across 28 suites, build clean,
+viewport audit clean.** Nothing was pushed. The hosted project was not touched.
+
+**Read §5 before you deploy anything tomorrow.** One migration changes a
+function the live app calls.
+
+## 1. What was built, and how far it was verified
+
+### Verified in a real browser, end to end
+
+- **The whole invite round trip** (`test/browser-invites.mjs`), with three
+  separate accounts in one browser: a manager picks a role and mints a code, a
+  second account signs in, enters it, sees what it grants *before* accepting,
+  joins, and lands in that team. Then the database is asked whether the
+  membership is real, whether the code is spent, and by whom.
+- **A spent code refused**, in words, to a third account, granting nothing.
+- **The safety case**: joining with a season already on the phone leaves the
+  roster, the history, the team on screen and the primary team exactly as they
+  were, while still granting the membership.
+- Both new sheets measured at iPhone SE and Pro Max.
+- The save-game, backfill and parked-writes browser harnesses were all re-run
+  and pass unchanged.
+
+### Verified against the real database, not the browser
+
+- **Every role's reach** (`test/roles-check.mjs`), as real signed-in users with
+  RLS on — the way 1b did it. A viewer reads and changes nothing; a scorer
+  scores and cannot touch the roster; a manager owns their team; a league admin
+  reaches every team in their league and nothing outside it; a stranger reaches
+  nothing and cannot even list invites.
+- **Invites** (`test/invites-check.mjs`): who may mint one, what it may grant,
+  the expiry clamp at both ends, single use, expiry, made-up codes, and that a
+  failed accept does not burn the invite.
+
+### Verified in tests only
+
+- The role shown in the account card for `stale` and `signed-out` accounts.
+  Both states render, but only the `ready` wording was seen in a browser.
+
+### Not verified anywhere
+
+- Nothing on a real iPhone. That still needs a deploy.
+- **League-scoped invites.** `create_invite` is team-scoped only. A league admin
+  adding teams to a league is 4a.
+
+## 2. Judgement calls
+
+- **A scorer can finalize. This changes `save_game`.** RLS already let a scorer
+  write games and box scores, but `save_game` is SECURITY DEFINER and did its
+  own check with `can_manage_team`, so a scorer could score every play and be
+  refused at the final whistle. `_014` widens that one line to a new
+  `can_score_team`. Everything else in the function is byte-identical, and the
+  change is strictly a widening — **a manager cannot tell it happened.** This is
+  the only place the finalize path was touched, and §5 says what to do about it.
+- **Accepting an invite never switches the season you are looking at**, unless
+  the device has nothing of its own. The membership is granted either way. The
+  alternative — repointing the primary team — would let a code replace what is
+  on someone's screen, and local data is never touched without being asked.
+  Choosing between two seasons is phase 4.
+- **A team invite cannot grant `league_admin`.** Refused by name rather than
+  quietly downgraded. Today such a row would be inert, but it would be a row
+  asserting something untrue, waiting for a query that trusts it.
+- **Invite codes are generated in the database**, not the client, and expire
+  within 1-30 days. Nobody can list invites they do not manage, so the code is
+  the only secret protecting a membership.
+- **The invite button appears only for a manager**, read from the database
+  rather than assumed. A scorer and a manager see the same season; guessing
+  generously would show a button the database refuses.
+
+## 3. Unfinished, and why
+
+- **No way to switch between teams.** Someone who joins a second team holds the
+  role but keeps looking at their own season. Deliberate — see §2 — and it is
+  the natural shape of 4a/4b.
+- **No league-scoped invites, and no UI for leagues at all.** `create_invite`
+  covers teams. Leagues are phase 4.
+- **No way to see or revoke a team's outstanding invites.** The database allows
+  it (managers can select and delete their own); nothing surfaces it. Worth
+  doing when there is a reason to look at a list of them.
+- **Nothing shows a viewer that they are a viewer** beyond the account card.
+  The roster screen still shows edit controls to a viewer; the database refuses
+  them, so the failure is safe but ugly. Flagged rather than fixed, because
+  changing what the roster screen renders touches the screen used tonight.
+
+## 4. New migrations — LOCAL ONLY, both pending
+
+Neither has been applied to the hosted project. `npx supabase migration list
+--linked` will show both as pending.
+
+| Migration | What it does | Risk |
+|---|---|---|
+| `20260101000014_scorer_can_finalize` | Adds `can_score_team`; `save_game` uses it instead of `can_manage_team` | **Touches a live function.** Strictly widening; a manager's path is unchanged and re-verified |
+| `20260101000015_create_invite` | Adds `create_invite`, `peek_invite`, `new_invite_code` | New functions only. Nothing existing is altered |
+
+Applying both takes the hosted project from 14 to 16 migrations and from 20 to
+23 security-definer functions.
+
+## 5. Deploy order for tomorrow
+
+**The safest order is to deploy nothing from this session until tonight's game
+is over and exported.** None of it is needed for scoring a game.
+
+When you are ready:
+
+1. **Export the season from the phone first.** As always.
+2. **Push the code** (`git push`). The client changes are additive: an account
+   card, an invite sheet, a join sheet. The scoring, saving, finalizing and
+   queueing paths are untouched — no file under `src/game/` changed in this
+   session.
+3. **Then `npx supabase db push`** to apply `_014` and `_015`.
+
+**Order matters here, and it is the opposite of last time.** The new client code
+does not call anything from `_014` or `_015` unless you tap Invite or Join, so
+deploying it before the migrations is safe. Pushing the migrations first is also
+safe. The only thing to avoid is tapping **Invite someone** on the deployed app
+before `_015` is applied — it would fail with "function not found", the write is
+not queued (it is a direct call, not a queued write), and nothing would be
+damaged.
+
+If you would rather not touch the database at all yet: **push the code and skip
+step 3.** Everything that exists today keeps working. Invite and Join will error
+if tapped, and nothing else changes.
+
+---
+
 # Morning report — Phase 1 is green
 
 All six slices done, plus one slice pulled forward from phase 3: **a game
@@ -448,9 +575,9 @@ user's, which is what they were.
 | Slice | Description | Status |
 |---|---|---|
 | 2a | Sign-in, session persistence, expiry and refresh failure, a signed-out state that hides nothing, and a sign-out control | **green** |
-| 2b | Roles: league admin, team manager, team scorer, viewer | todo |
+| 2b | Roles: league admin, team manager, team scorer, viewer — enforced in RLS, every role's reach proven | **green** |
 | — | Surfacing parked writes was pulled forward into 6b and is done | **green** |
-| 2c | Invite flow: manager generates a link/code, invitee lands in the right team+role | todo |
+| 2c | Invite flow: manager generates a code with a role, invitee lands in the right team | **green** (team-scoped; league invites are phase 4) |
 
 ## Phase 3 — Live shared scoring
 
