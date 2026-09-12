@@ -1,11 +1,12 @@
 # Report — phase 4, multi-team and multi-league (4a, 4b, 4c, 4d)
 
-All four slices built and green, on branch **`phase-4`**, six commits, nothing
-pushed and the hosted project untouched. **1179 assertions across 36 suites**
-(up from 1044 across 33), build clean, viewport audit clean, and all seven
-browser harnesses re-run in one sequential pass and passing.
+All four slices built and green, plus **4e** — the wire between a fixture and a
+scored game — added before merging. On branch **`phase-4`**, nothing pushed and
+the hosted project untouched. **1213 assertions across 36 suites** (up from 1044
+across 33), build clean, viewport audit clean, and all seven browser harnesses
+re-run and passing.
 
-**Read §5 and §6 before you deploy.** Three new migrations. Two of them replace
+**Read §5 and §6 before you deploy.** Four new migrations. Three of them replace
 functions the live app calls, and the order is **migrations first this time** —
 §6 says why, and why that direction is safe in a way the other one is not.
 
@@ -13,9 +14,12 @@ functions the live app calls, and the order is **migrations first this time** �
 code, bring teams in, put fixtures on a calendar, and read one table across all
 of it. A phone can be on several teams and choose which it is looking at.
 
-**And the honest headline under it:** the season screen's own opponent picker
-still works in device-side slugs, so a game scored the normal way does not land
-in the league table yet. §4 leads with it.
+**And the gap that was under it is closed.** A fixture is scored from the league
+screen — "Score this game" — which starts the game under the fixture's own id
+and names the opposition by its real team id. The finished game IS the fixture:
+in the table, in both teams' seasons, and on one row rather than two. The season
+screen's slug-based picker is untouched, because that is the right model for a
+friendly against a team with no account.
 
 ---
 
@@ -34,6 +38,18 @@ top with the win added to its prior record, the loser below it, ranked 1 and 2,
 percentages right — and the leaders filled in from the box score, switchable
 between runs, RBI, hits and home runs. Finally the follower leaves, which takes
 their team out and keeps their membership.
+
+The same harness then **scores that fixture through the app**: tap "Score this
+game", three strikeouts to get through the opposition's half, two home runs of
+our own, Game completed, Finalize. Checked afterwards: the fixture is `live`
+while it is being scored and `final` when it is called; it is one row, not a
+fixture and a game beside it; **no team was invented from a slug**; the score is
+2-0 the right way round; the box score is filed to the two real teams on the
+right sides; the game is in phone A's season as a win and — after a reload — in
+phone B's as a loss, which is the same game from the other dugout. Then the
+table, read column by column off the screen: the winner top with the win added
+to its own prior record, the loser below, and the leaders filled in from the box
+score that was just written.
 
 **`test/browser-team-switch.mjs`** — one account managing two teams, and a
 second account that only scores for one of them. The switcher lists both, marks
@@ -96,6 +112,9 @@ from the roster leaves the order with them.
 
 - **A league with more than two teams.** Nothing in the table or the leaders
   cares, and nothing has run it.
+- **A fixture scored from the AWAY side, in a browser.** The away case is
+  checked against the database on its own (the score and the result have to
+  invert), but the browser harness scores from the home dugout.
 - **A private league in the app.** The database half is checked; there is no UI
   for the toggle, so nobody has seen it on a screen.
 - Anything on a real iPhone. That still needs a deploy.
@@ -217,6 +236,27 @@ it means the phase 3 report's "viewport audit clean" line rested on a single run
 rather than a repeated one. Fixed, and the leagues screen was added to the
 audit's list so it is measured on every run from here.
 
+**A league was listed once per person in it.** `memberships_select_own` admits
+every membership on a league you administer — which is right, an admin needs to
+see who is in their league — but the leagues list read it unfiltered, so it
+returned one row per MEMBER rather than one per league. A commissioner saw their
+league twice, with somebody else's role beside it. The same shape of bug was in
+the team switcher's read. Both are scoped to the signed-in user now, and a read
+that cannot establish who it is for returns nothing rather than somebody else's
+rows. **Found by a duplicate-key React warning**, which is only a failure because
+the browser harnesses require a completely silent console — the check earns its
+keep here for the second time.
+
+**The user id was captured on the first render**, before there was a session, so
+the fix above answered null forever. The leagues api is built once and now reads
+its identity through a ref rather than a closure.
+
+**A browser harness started too soon after `supabase db reset` HUNG**, silently,
+with no output at all — supabase-js retries a failed request with a long backoff
+while the auth container is still restarting. Silence is the worst of the three
+outcomes. All three context-creating harnesses now wait for `/auth/v1/health`
+and refuse loudly if it never comes up.
+
 **Seeding a browser harness raced the app's own first save.** Writing
 localStorage into an already-running app competes with the blank starting season
 it writes on boot, and whichever lands last wins — which is why the league
@@ -233,21 +273,18 @@ on the next line.
 
 ## 4. Unfinished, and what to watch
 
-**The first thing to fix, and it is not close.** The season screen's opponent
-picker still works in **device-side slugs** (`rubber-chickens`), while a league
-is made of real account teams. `save_game` resolves the opponent by matching
-that slug against teams the user is a member of, so a game scored the normal way
-resolves to a team **outside** the league — and therefore does not land in the
-league table. Concretely: you can schedule a league fixture, and you can score a
-game, and those are two unconnected acts. Until the opponent picker can choose a
-league team, the table only fills from games written with both league teams on
-them. Everything else in 4c is built and verified; this is the wire that is not
-connected.
+**What is left of it.** 4e connects a league FIXTURE to the scoring flow, which
+is the path that matters: a commissioner schedules, somebody taps "Score this
+game", and the result is a league result. What is still not connected is the
+other direction — starting a game from the season screen and having it *become*
+a league game. That picker is slug-based and stays that way, because a friendly
+against a team with no account is a real and common case. The consequence to
+know: **a league game scored from the season screen instead of from the fixture
+is a friendly.** It goes into your own season and not into the table.
 
-The shape of the fix is a "score this fixture" action on a league fixture, which
-starts the game with the fixture's `client_id` and the opposing **team id**
-rather than a slug. `start_live_game` and `save_game` already do the right thing
-once given one.
+The narrower thing I would add next is a fixture on the SEASON screen's "next
+game" card, so the league fixture is the obvious thing to tap rather than
+something to go and find.
 
 Also outstanding:
 
@@ -292,6 +329,7 @@ through `_021` have never been pushed.
 | `20260101000019_leagues` | Adds `create_league_invite`, `join_league`, `schedule_game`, two guard triggers on `teams`; **replaces `peek_invite`** | **Touches a live function.** `peek_invite` is dropped and recreated at the same signature with extra columns; existing callers read `team_name`, which is still there. The triggers are new refusals — see below |
 | `20260101000020_shared_lineup` | Adds `players.lineup_order` and `players.on_bench`; **replaces `save_season`** | **Touches a live function.** Same signature, same guards, two more columns on the way through. A payload with no `lineup` key leaves the order alone, so an old client is unaffected |
 | `20260101000021_games_know_their_league` | Adds `shared_league`; **replaces `save_game` and `start_live_game`** | **Touches two live functions.** Both keep their exact signatures. The only change is `league_id` being set when both teams share a league |
+| `20260101000022_score_a_fixture` | Adds `can_name_opponent`; **replaces `save_game` and `start_live_game` again** | **Touches two live functions.** Both keep their exact signatures. A payload with no `opponentTeamId` — which is every payload an older client sends — takes the identical path it took before |
 
 **The one behaviour change to know about before pushing `_019`:** the triggers
 refuse to put a team into a league nobody invited you to. If anything in the
@@ -322,7 +360,9 @@ principle: deploy whichever side fails safely if the other is missing.
 - **Migrations without the new code: nothing breaks.** `peek_invite` returns
   extra columns the old client ignores. `save_season` leaves the order alone
   when the payload does not mention it, which an old client never does.
-  `save_game` and `start_live_game` set a column nothing yet reads.
+  `save_game` and `start_live_game` set a column nothing yet reads, and their
+  new opponent branch is only reached by a payload carrying `opponentTeamId`,
+  which no older client sends.
 - **Code without the migrations: the league screen fails on every action.**
   Start a league, mint a code, join, schedule — each is a direct RPC call, not a
   queued write, so it errors on screen with "function not found" and nothing is
@@ -332,8 +372,9 @@ So:
 
 1. **Export the season from the phone first.** As always.
 2. **`npx supabase db push`** — applies everything the remote has not seen, in
-   order. Do not cherry-pick: `_021` replaces functions that `_019` and `_020`
-   assume the shape of.
+   order. Do not cherry-pick: `_021` and `_022` each replace `save_game` and
+   `start_live_game`, so the last one applied is the one that survives, and
+   they must go in order.
 3. **Run the overload check in §5.** Four names, one row each.
 4. **Then push the code** (`git push` — this session pushed nothing, and the
    work is on `phase-4`, not `main`).
@@ -1282,12 +1323,14 @@ lost or reinstalled phone, and it needs none of the machinery below.
 | 4b | Team manager: own roster and lineup only | **green** (D16) |
 | 4c | League-wide standings and leaders across all tracked games | **green** (D15) |
 | 4d | Manual record adjustments still per team | **green** |
+| 4e | Score a fixture: a normally-scored league game reaches the table | **green** (D17) |
 
 A team joins a league by redeeming its code, which is also what lets it be put
-there at all — see D14. The season screen's own opponent picker still works in
-device-side slugs and is NOT connected to league teams, so a game scored there
-does not land in the league table. That is the first thing to fix; see the
-report at the top.
+there at all — see D14. A fixture on a league calendar is scored from the league
+screen, which is what makes it a league result rather than a friendly against a
+name typed into one phone — see D17. The season screen's own opponent picker is
+still slug-based, which is correct for a friendly and is what 4e routes around
+rather than replaces.
 
 ## Phase 5 — Public / spectator views
 
@@ -1642,6 +1685,43 @@ is in the order" would wipe a real batting order from the account every single
 time such a phone saved — silently, and repeatedly. An absence is not an
 instruction. This is the same lesson as the empty roster in `_012`, and it has
 its own test. An EXPLICITLY empty order is different, and is obeyed.
+
+### D17 — A league game is named by team id; a friendly is named by a slug
+
+The season screen's opponent picker has always worked in device-side slugs
+(`rubber-chickens`) — a name typed into one phone, which `save_game` turns into
+a team that phone owns. That is right for a friendly: nobody else's record is
+touched, and the opposition needs no account.
+
+It is wrong for a league. A league is made of real teams with real ids, and a
+game resolved from a slug lands against a team OUTSIDE the league — so the
+fixture stayed on the calendar, the game went into one season, and the table
+never heard about either. 4a scheduled fixtures and 4c built a table; this is
+the wire between them.
+
+**The rule.** A payload may name the opposition by `opponentTeamId`. When it
+does, that team is the opponent — no lookup, no team invented. When it does not,
+the slug path runs exactly as it always has. Scoring a fixture also carries the
+FIXTURE's own client id, so `start_live_game` and `save_game` find the row
+already on the schedule and finish it rather than making a second game beside
+it: a fixture becomes live when somebody starts scoring it, and final when they
+call it.
+
+**Who may name a team, and why it is narrower than the policy.** Row-level
+security has always let a scorer of EITHER team record a game between them
+(`can_score_teams`) — that is how one person keeps the book for both sides. But
+these functions are SECURITY DEFINER, so accepting any uuid would be a wider
+door than the policy: anyone who can score for any team could write a result
+into any other team's record, and once both are in a league, into the table
+everyone reads. So the named team must be one we share a league with, or one we
+hold a membership on. Anything else is refused by name.
+
+**Which dugout.** A game's score and result are recorded from the HOME team's
+point of view, because a game belongs to two teams. Everything scored from the
+season screen is at home, which is what the record was hard-coded to. A fixture
+says which side we are on, and the record carries it — getting that the wrong
+way round hands the win to the wrong team, and it is the kind of wrong nobody
+notices until the table is read. There is a test for the away case alone.
 
 ### D3 — League visibility is a column, not an assumption
 

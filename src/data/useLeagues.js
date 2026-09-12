@@ -24,10 +24,23 @@ const EMPTY = {
   notice: null,        // something that just happened, worth a line on screen
 };
 
-export function useLeagues(client, { getTeamId } = {}) {
+export function useLeagues(client, { getTeamId, getUserId } = {}) {
   const [state, setState] = useState(EMPTY);
+
+  // The api object is built once, so anything it closes over has to be read
+  // through a ref rather than captured. The first render happens before there
+  // is a session, so a captured getUserId answers null forever — and a
+  // membership read that cannot say who it is for returns every member of every
+  // league you administer, not every league you are in.
+  const idsRef = useRef({ getTeamId, getUserId });
+  idsRef.current = { getTeamId, getUserId };
+
   const apiRef = useRef(null);
-  if (!apiRef.current) apiRef.current = createLeagues(client);
+  if (!apiRef.current) {
+    apiRef.current = createLeagues(client, {
+      getUserId: () => (idsRef.current.getUserId ? idsRef.current.getUserId() : null),
+    });
+  }
   const api = apiRef.current;
 
   const stateRef = useRef(state);
@@ -118,7 +131,7 @@ export function useLeagues(client, { getTeamId } = {}) {
 
     /** Redeem a code, optionally bringing this device's team in with it. */
     join: (code, bringTeam) =>
-      run(() => api.join(code, bringTeam ? (getTeamId ? getTeamId() : null) : null), {
+      run(() => api.join(code, bringTeam ? (idsRef.current.getTeamId ? idsRef.current.getTeamId() : null) : null), {
         after: async (r) => {
           await refresh();
           if (r && r.joined) await open(r.joined.league_id);

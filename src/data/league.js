@@ -113,6 +113,12 @@ export const INITIAL_STATE = {
   // Live state is the two folded together — see game/events.js.
   gameClientId: null,
   gameStartedAt: null,
+  // Set only when this game is a league fixture: the opposing team's real id,
+  // and which dugout we are in. Null and true for every game started the way
+  // they always have been.
+  gameOpponentTeamId: null,
+  gameHome: true,
+  gameFixture: null,
   gameLog: [],
   serverLog: [],
   liveGameId: null,

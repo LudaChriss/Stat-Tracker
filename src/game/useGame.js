@@ -186,6 +186,9 @@ export function useGame(injectedRepository) {
       out.serverLog = [];
       out.gameClientId = null;
       out.gameStartedAt = null;
+      out.gameOpponentTeamId = null;
+      out.gameHome = true;
+      out.gameFixture = null;
       out.liveGameId = null;
       out.liveConnected = false;
       out.finalPrompted = false;
@@ -201,8 +204,13 @@ export function useGame(injectedRepository) {
       clientId: s.gameClientId,
       opponentId: s.opponentId,
       opponent: opponentTeam(s).name,
+      // Naming the opposition by its real id is what makes a game a LEAGUE
+      // game rather than a game against a name typed into this phone. Null for
+      // everything scored the way it always has been, and the server falls
+      // back to the slug exactly as before.
+      opponentTeamId: s.gameOpponentTeamId || null,
       sport: s.sport,
-      home: true,
+      home: s.gameHome !== false,
       label: when.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       date: when.toISOString(),
     };
@@ -519,6 +527,12 @@ export function useGame(injectedRepository) {
               gameFinal: false,
               gameClientId: clientId,
               gameStartedAt: startedAt,
+              // An ordinary game is against whoever the picker says, at home,
+              // and belongs to no fixture. Cleared explicitly so a game started
+              // right after a league fixture cannot inherit its identity.
+              gameOpponentTeamId: null,
+              gameHome: true,
+              gameFixture: null,
               liveGameId: null,
               liveConnected: false,
               finalPrompted: false,
@@ -575,6 +589,9 @@ export function useGame(injectedRepository) {
               gameFinal: false,
               gameClientId: found.clientId,
               gameStartedAt: Date.parse(found.date) || Date.now(),
+              gameOpponentTeamId: found.opponentTeamId || null,
+              gameHome: found.home !== false,
+              gameFixture: null,
               liveGameId: found.gameId,
               liveConnected: false,
               finalPrompted: false,
@@ -587,6 +604,79 @@ export function useGame(injectedRepository) {
           ),
         );
         toast('Joined the game in progress', 3000);
+      },
+
+      /**
+       * Score a fixture the league put on the calendar.
+       *
+       * The whole point of this action is two identifiers. The game takes the
+       * FIXTURE's client id, so `start_live_game` and `save_game` find the row
+       * that is already on the schedule and finish it rather than making a
+       * second game beside it. And the opposition is named by its real TEAM ID,
+       * so the result lands on that team's record and in the league's table —
+       * rather than against a team invented from a slug typed into this phone,
+       * which is where every league game went until now.
+       *
+       * The opposing team is also adopted into this device's list of teams, so
+       * the scorebook, the batting order and the box score work exactly as they
+       * do for any other game. Nothing about scoring changes; only who the game
+       * turns out to have been against.
+       */
+      startFixture: ({ fixture, opponent, home }) => {
+        if (!fixture || !opponent) return;
+        const s = stateRef.current;
+        const startedAt = Date.parse(fixture.scheduled_at) || Date.now();
+
+        // A slug for this device's own model of the opposition. Reused if this
+        // team has been played before, so their roster and their accumulated
+        // stats stay attached to them.
+        const existing = s.teams.find((t) => t.teamId === opponent.id);
+        const slug = existing ? existing.id : slugId(opponent.name, s.teams);
+        const teams = existing
+          ? s.teams.map((t) => (t.teamId === opponent.id ? { ...t, name: opponent.name } : t))
+          : [...s.teams, { id: slug, teamId: opponent.id, name: opponent.name, priorW: 0, priorL: 0, players: [] }];
+
+        const event = {
+          clientEventId: newEventId(),
+          kind: 'start',
+          seq: null,
+          at: startedAt,
+          payload: {
+            gameClientId: fixture.client_id,
+            sport: fixture.sport || s.sport,
+            opponentId: slug,
+            trackMode: s.trackMode,
+            lineup: s.lineup,
+            bench: s.bench,
+          },
+        };
+
+        setState((cur) =>
+          withLog(
+            {
+              ...cur,
+              teams,
+              screen: 'live',
+              liveTab: 'lineup',
+              gameFinal: false,
+              sport: fixture.sport || cur.sport,
+              gameClientId: fixture.client_id,
+              gameStartedAt: startedAt,
+              gameOpponentTeamId: opponent.id,
+              gameHome: home !== false,
+              gameFixture: fixture.id,
+              liveGameId: null,
+              liveConnected: false,
+              finalPrompted: false,
+              liveMismatch: null,
+              joinable: null,
+              bookOff: null,
+              selRunner: null,
+            },
+            { gameLog: [event], serverLog: [] },
+          ),
+        );
+        toast(`Scoring ${opponent.name}`, 3000);
       },
 
       // Scoring — each of these is one event, appended and sent.
@@ -726,6 +816,9 @@ export function useGame(injectedRepository) {
           confirmCancelGame: false,
           gameClientId: null,
           gameStartedAt: null,
+          gameOpponentTeamId: null,
+          gameHome: true,
+          gameFixture: null,
           gameLog: [],
           serverLog: [],
           liveGameId: null,
@@ -837,6 +930,9 @@ export function useGame(injectedRepository) {
           serverLog: [],
           gameClientId: null,
           gameStartedAt: null,
+          gameOpponentTeamId: null,
+          gameHome: true,
+          gameFixture: null,
           liveGameId: null,
           liveConnected: false,
           finalPrompted: false,
@@ -1169,6 +1265,9 @@ export function useGame(injectedRepository) {
           gameFinal: false,
           gameClientId: null,
           gameStartedAt: null,
+          gameOpponentTeamId: null,
+          gameHome: true,
+          gameFixture: null,
           gameLog: [],
           serverLog: [],
           liveGameId: null,

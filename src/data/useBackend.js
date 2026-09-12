@@ -496,10 +496,16 @@ export function useBackend() {
      * ones you are actually on can be switched to.
      */
     myTeams: async () => {
-      const { data, error } = await client
+      // Scoped to THIS user's rows. `memberships_select_own` also admits every
+      // membership on a team you manage, so an unfiltered read returns one row
+      // per MEMBER rather than one per team — the team listed once per person
+      // on it, with somebody else's role beside it.
+      let query = client
         .from('memberships')
         .select('role, team_id, teams(id, name)')
         .not('team_id', 'is', null);
+      if (userIdRef.current) query = query.eq('user_id', userIdRef.current);
+      const { data, error } = await query;
       if (error) return { teams: [], error };
       const teams = (data || [])
         .filter((m) => m.teams)

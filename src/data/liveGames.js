@@ -148,6 +148,10 @@ export function createLiveGames(client, { getTeamId }) {
       gameId: row.id,
       clientId: row.client_id,
       opponentClientId: row.client_opponent_id,
+      // The other side's real team id, so a phone joining a league game
+      // finalises it against the same team the first phone did rather than
+      // against a slug of its own.
+      opponentTeamId: row.home_team_id === id ? row.away_team_id : row.home_team_id,
       sport: row.sport,
       label: row.label,
       date: row.scheduled_at,

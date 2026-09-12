@@ -359,7 +359,7 @@ function Table({ rows, myTeamId }) {
 }
 
 /** One league: its teams, its fixtures, and what a commissioner can do to them. */
-function LeagueDetail({ leagues, actions, myTeamId }) {
+function LeagueDetail({ leagues, actions, myTeamId, onScoreFixture }) {
   const { detail, busy, error, code, notice } = leagues;
   const { league, teams, games, role } = detail;
   const lines = detail.lines || [];
@@ -519,19 +519,49 @@ function LeagueDetail({ leagues, actions, myTeamId }) {
           <div style={label}>Nothing scheduled.</div>
         </Card>
       )}
-      {fixtures.map((g) => (
-        <Card key={g.id} style={{ padding: '12px 14px', marginBottom: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.coral }}>{g.label || 'FIXTURE'}</div>
-          <div style={{ fontSize: 14.5, fontWeight: 800, marginTop: 2, overflowWrap: 'anywhere' }}>
-            {teamName(g.home_team_id)} vs {teamName(g.away_team_id)}
-          </div>
-          <div style={{ ...label, marginTop: 2, ...tnum }}>
-            {new Date(g.scheduled_at).toLocaleString('en-US', {
-              weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-            })}
-          </div>
-        </Card>
-      ))}
+      {fixtures.map((g) => {
+        // Ours to score only if our team is in it. The opposition is the other
+        // side, named by its real id — which is what makes the result land in
+        // this table rather than against a name typed into a phone.
+        const mine = myTeamId && (g.home_team_id === myTeamId || g.away_team_id === myTeamId);
+        const otherId = g.home_team_id === myTeamId ? g.away_team_id : g.home_team_id;
+        const other = teams.find((t) => t.id === otherId);
+        return (
+          <Card key={g.id} style={{ padding: '12px 14px', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.coral }}>{g.label || 'FIXTURE'}</div>
+            <div style={{ fontSize: 14.5, fontWeight: 800, marginTop: 2, overflowWrap: 'anywhere' }}>
+              {teamName(g.home_team_id)} vs {teamName(g.away_team_id)}
+            </div>
+            <div style={{ ...label, marginTop: 2, ...tnum }}>
+              {new Date(g.scheduled_at).toLocaleString('en-US', {
+                weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+              })}
+            </div>
+            {mine && other && (
+              <button
+                onClick={() =>
+                  onScoreFixture({ fixture: g, opponent: other, home: g.home_team_id === myTeamId })
+                }
+                style={{
+                  width: '100%',
+                  marginTop: 10,
+                  background: C.coral,
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: 13,
+                  padding: 12,
+                  minHeight: 46,
+                  fontSize: 14.5,
+                  fontWeight: 800,
+                  ...btn,
+                }}
+              >
+                Score this game
+              </button>
+            )}
+          </Card>
+        );
+      })}
 
       {played.length > 0 && (
         <>
@@ -702,7 +732,12 @@ export default function Leagues({ v, actions }) {
         onBack={detail ? la.close : actions.goLeague}
       />
       {detail ? (
-        <LeagueDetail leagues={leagues} actions={la} myTeamId={v.account.teamId} />
+        <LeagueDetail
+          leagues={leagues}
+          actions={la}
+          myTeamId={v.account.teamId}
+          onScoreFixture={actions.startFixture}
+        />
       ) : (
         <LeagueList leagues={leagues} actions={la} />
       )}

@@ -388,6 +388,207 @@ console.log('\n--- a game between two league teams belongs to the league ------'
 }
 
 // =============================================================================
+console.log('\n--- scoring a fixture is scoring a league game -----------------');
+// =============================================================================
+//
+// The wire that was missing. A game scored the normal way resolved its opponent
+// from a device-side slug and so landed against a team OUTSIDE the league. A
+// payload may now name the opposition by its real id, and the fixture's own
+// client id makes the finished game the fixture rather than a second game
+// beside it.
+{
+  const fixtureClientId = `fx-score-${stamp}`;
+  const scheduled = await commissioner.client.rpc('schedule_game', {
+    p_league_id: leagueId,
+    payload: {
+      clientId: fixtureClientId,
+      homeTeamId: roversId,
+      awayTeamId: wanderersId,
+      scheduledAt: '2026-09-24T18:30:00Z',
+      label: 'Sep 24',
+      sport: 'kickball',
+    },
+  });
+  eq('setup: a fixture on the calendar', scheduled.error, null);
+  const fixtureId = scheduled.data;
+
+  // The home side starts scoring it, naming the opposition by id.
+  const started = await rovers.client.rpc('start_live_game', {
+    p_team_id: roversId,
+    payload: {
+      clientId: fixtureClientId,
+      opponentId: 'wanderers-slug',
+      opponent: 'Wanderers',
+      opponentTeamId: wanderersId,
+      sport: 'kickball',
+      home: true,
+    },
+  });
+  eq('starting it picks up the fixture', started.data, fixtureId);
+
+  const { data: live } = await admin.from('games').select('*').eq('id', fixtureId).single();
+  eq('which is now live rather than scheduled', live.status, 'live');
+  eq('against the real team, not a slug of one', live.away_team_id, wanderersId);
+  eq('and still filed under the league', live.league_id, leagueId);
+
+  const { count } = await admin
+    .from('games').select('id', { count: 'exact', head: true }).eq('client_id', fixtureClientId);
+  eq('there is one game, not a fixture and a game', count, 1);
+
+  // No team was invented from the slug on the way past.
+  const { count: invented } = await admin
+    .from('teams').select('id', { count: 'exact', head: true }).eq('client_id', 'wanderers-slug');
+  eq('and no team was invented from the slug', invented, 0);
+
+  // Finish it.
+  const box = {
+    id: fixtureClientId,
+    date: '2026-09-24',
+    label: 'Sep 24',
+    opponentId: 'wanderers-slug',
+    opponent: 'Wanderers',
+    opponentTeamId: wanderersId,
+    home: true,
+    score: { us: 7, them: 4 },
+    result: 'W',
+    sport: 'kickball',
+    innings: 7,
+    lines: [
+      { pid: 'h0', name: 'Casey Rivera', team: 'home', ab: 4, h: 3, r: 2, rbi: 3, bb: 0, k: 0, d: 0, t: 0, hr: 1 },
+      { pid: 'a0', name: 'Batter 1', team: 'away', ab: 4, h: 2, r: 1, rbi: 1, bb: 0, k: 0, d: 0, t: 0, hr: 0 },
+    ],
+  };
+  const saved = await rovers.client.rpc('save_game', { p_team_id: roversId, payload: box });
+  eq('finalising it works', saved.error, null);
+  eq('and finishes the same row', saved.data, fixtureId);
+
+  const { data: done } = await admin.from('games').select('*').eq('id', fixtureId).single();
+  eq('the fixture is now the result', done.status, 'final');
+  eq('with the score from the home team\'s point of view', [done.home_score, done.away_score], [7, 4]);
+  eq('the result the right way round', done.result, 'W');
+  eq('between the two league teams', [done.home_team_id, done.away_team_id], [roversId, wanderersId]);
+  eq('in the league', done.league_id, leagueId);
+
+  const { count: still } = await admin
+    .from('games').select('id', { count: 'exact', head: true }).eq('client_id', fixtureClientId);
+  eq('still exactly one row', still, 1);
+
+  // Both sides' box-score lines are filed to the right teams.
+  const { data: written } = await admin.from('game_lines').select('*').eq('game_id', fixtureId);
+  const ours = written.filter((l) => l.team_id === roversId);
+  const theirs = written.filter((l) => l.team_id === wanderersId);
+  eq('our line is ours', [ours.length, ours[0].name_snapshot, ours[0].home_away], [1, 'Casey Rivera', 'home']);
+  eq('and theirs is theirs', [theirs.length, theirs[0].home_away], [1, 'away']);
+
+  // And it moves the table for both.
+  const { leagueStandings } = await import('../src/game/leagueTables.js');
+  const teamsIn = await admin.from('teams').select('*').eq('league_id', leagueId);
+  const gamesIn = await admin.from('games').select('*').eq('league_id', leagueId);
+  const rows = leagueStandings(teamsIn.data || [], gamesIn.data || []);
+  const roversRow = rows.find((r) => r.id === roversId);
+  const wanderersRow = rows.find((r) => r.id === wanderersId);
+  eq('the winner is credited in the league table', roversRow.tracked >= 1 && roversRow.w >= 1, true);
+  eq('and the loser is too', wanderersRow.tracked >= 1 && wanderersRow.l >= 1, true);
+}
+
+// AWAY. The score is filed from the HOME team's point of view, so a game scored
+// from the away dugout has to be inverted on the way in — getting that wrong
+// hands the win to the wrong team, and it is the kind of wrong nobody notices
+// until the table is read.
+{
+  const clientId = `fx-away-${stamp}`;
+  const box = {
+    id: clientId,
+    date: '2026-09-25',
+    label: 'Sep 25',
+    opponentId: 'rovers-slug',
+    opponent: 'Rovers',
+    opponentTeamId: roversId,
+    home: false,
+    score: { us: 9, them: 2 },
+    result: 'W',
+    sport: 'kickball',
+    innings: 7,
+    lines: [{ pid: 'h0', name: 'Sam Keeler', team: 'home', ab: 4, h: 2, r: 3, rbi: 4, bb: 0, k: 0, d: 0, t: 0, hr: 1 }],
+  };
+  const saved = await wanderers.client.rpc('save_game', { p_team_id: wanderersId, payload: box });
+  eq('an away team can record the game', saved.error, null);
+
+  const { data } = await admin.from('games').select('*').eq('id', saved.data).single();
+  eq('we are the away side', [data.home_team_id, data.away_team_id], [roversId, wanderersId]);
+  eq('our 9 is the away score', [data.home_score, data.away_score], [2, 9]);
+  eq('and our win is the home team\'s loss', data.result, 'L');
+
+  const { data: lines } = await admin.from('game_lines').select('*').eq('game_id', saved.data);
+  eq('our line is filed as the away side of the game', lines[0].home_away, 'away');
+  eq('and to our team', lines[0].team_id, wanderersId);
+}
+
+// WHO MAY NAME A TEAM. Accepting any uuid would let anyone who can score for
+// one team write a result into another team's record — and, once both are in a
+// league, into the table everyone reads.
+{
+  const box = (over) => ({
+    id: `fx-bad-${stamp}-${over.tag}`,
+    date: '2026-09-26', label: 'Sep 26', opponentId: 'x', opponent: 'X',
+    home: true, score: { us: 1, them: 0 }, result: 'W', sport: 'kickball', innings: 7,
+    lines: [{ pid: 'h0', name: 'Someone', team: 'home', ab: 1, h: 1, r: 1, rbi: 0, bb: 0, k: 0, d: 0, t: 0, hr: 0 }],
+    ...over,
+  });
+
+  refused('a team outside the league and not one you are on is refused',
+    await rovers.client.rpc('save_game', {
+      p_team_id: roversId, payload: box({ tag: 'out', opponentTeamId: outsiderId }),
+    }),
+    'not in this team\'s league and not one you are on');
+
+  refused('and so is a team that does not exist',
+    await rovers.client.rpc('save_game', {
+      p_team_id: roversId,
+      payload: box({ tag: 'ghost', opponentTeamId: '00000000-0000-0000-0000-000000000000' }),
+    }),
+    'not in this team\'s league and not one you are on');
+
+  refused('nor can a team play itself',
+    await rovers.client.rpc('save_game', {
+      p_team_id: roversId, payload: box({ tag: 'self', opponentTeamId: roversId }),
+    }),
+    'not in this team\'s league and not one you are on');
+
+  // A team you are ON, outside any league, is fine — that is the "my other
+  // team" case the slug path already allowed.
+  const mine = await teamOf(rovers, 'Rovers Second');
+  const ok2 = await rovers.client.rpc('save_game', {
+    p_team_id: roversId, payload: box({ tag: 'mine', opponentTeamId: mine }),
+  });
+  eq('but a team you are on is allowed', ok2.error, null);
+}
+
+// THE OLD PATH, UNTOUCHED. No opponentTeamId at all resolves the slug and
+// creates a team we own, exactly as it always has.
+{
+  const clientId = `fx-slug-${stamp}`;
+  const saved = await rovers.client.rpc('save_game', {
+    p_team_id: roversId,
+    payload: {
+      id: clientId, date: '2026-09-27', label: 'Sep 27',
+      opponentId: `plain-slug-${stamp}`, opponent: 'Just A Name',
+      home: true, score: { us: 3, them: 1 }, result: 'W', sport: 'kickball', innings: 7,
+      lines: [{ pid: 'h0', name: 'Casey Rivera', team: 'home', ab: 3, h: 2, r: 1, rbi: 1, bb: 0, k: 0, d: 0, t: 0, hr: 0 }],
+    },
+  });
+  eq('a game with no named opponent still saves', saved.error, null);
+
+  const { data } = await admin.from('teams').select('id, name, league_id').eq('client_id', `plain-slug-${stamp}`);
+  eq('a team is invented from the slug, as before', (data || []).length, 1);
+  eq('with the name that was sent', data[0].name, 'Just A Name');
+  eq('and it is in no league, so this is not a league game', data[0].league_id, null);
+
+  const { data: game } = await admin.from('games').select('league_id').eq('client_id', clientId).single();
+  eq('nor is the game', game.league_id, null);
+}
+
+// =============================================================================
 console.log('\n--- a manual record stays the team\'s own -----------------------');
 // =============================================================================
 //
@@ -423,15 +624,19 @@ console.log('\n--- a manual record stays the team\'s own -----------------------
   const rows = leagueStandings(teamsIn.data || [], gamesIn.data || []);
   const roversRow = rows.find((r) => r.id === roversId);
   const wanderersRow = rows.find((r) => r.id === wanderersId);
-  // One league game has been played by this point in the suite — the fixture
-  // above, marked final. So the table is that game ON TOP OF each team's own
-  // manual record, which is the whole rule.
-  eq('the table starts that team from its own record and adds what it tracked',
-    [roversRow.w, roversRow.l, roversRow.t], [7, 2, 1]);
-  eq('and the other team\'s record is its own, untouched by theirs',
-    [wanderersRow.w, wanderersRow.l, wanderersRow.t], [0, 1, 0]);
-  eq('games played counts the untracked ones too', roversRow.gp, 10);
-  eq('though only one of them was actually scored here', roversRow.tracked, 1);
+  // Stated as the RULE rather than as a snapshot: a team's row is its own
+  // manual record plus whatever it actually played. Written this way so it
+  // stays true however many league games the rest of this suite has scored by
+  // the time it runs.
+  const played = (gamesIn.data || []).filter((g) => g.status === 'final');
+  const playedBy = (id) => played.filter((g) => g.home_team_id === id || g.away_team_id === id).length;
+
+  eq('the table counts exactly the games that team played', roversRow.tracked, playedBy(roversId));
+  eq('and starts it from its own manual record, untouched',
+    roversRow.gp - roversRow.tracked, 9);
+  eq('the other team was given no manual record, and has none',
+    wanderersRow.gp - wanderersRow.tracked, 0);
+  eq('so one team\'s offset never lands on another\'s', wanderersRow.w + wanderersRow.l + wanderersRow.t, wanderersRow.tracked);
 }
 
 // =============================================================================

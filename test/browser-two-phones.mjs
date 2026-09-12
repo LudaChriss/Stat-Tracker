@@ -86,6 +86,22 @@ need('Chrome must be running with --remote-debugging-port=9222', !!browserWsUrl)
 
 const admin = createClient(st.API_URL, st.SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
+// The stack answers /auth/v1/health only once GoTrue is actually up, and the
+// containers restart on `supabase db reset`. supabase-js retries a failed
+// request with a long backoff, so a harness started a moment too early does not
+// fail — it HANGS, silently, with no output at all. That is the worst of the
+// three outcomes and it cost most of an afternoon twice.
+{
+  let up = false;
+  for (let i = 0; i < 90 && !up; i++) {
+    try {
+      up = (await fetch(`${st.API_URL}/auth/v1/health`, { signal: AbortSignal.timeout(2000) })).ok;
+    } catch { /* not yet */ }
+    if (!up) await new Promise((r) => setTimeout(r, 1000));
+  }
+  need('the auth service must be up (it restarts after `supabase db reset`)', up);
+}
+
 // ---- two accounts, and the session blobs their browsers will accept ----------
 const password = 'Password123!';
 const stamp = `${Date.now()}${Math.random().toString(36).slice(2, 5)}`;

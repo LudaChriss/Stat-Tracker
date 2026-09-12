@@ -200,7 +200,10 @@ export default function App() {
   // Leagues live beside the season rather than inside it: one account can be in
   // several, and none of them is needed to score a game. Nothing is fetched
   // until the screen is opened.
-  const leagues = useLeagues(getSupabase(), { getTeamId: () => backend.teamId || null });
+  const leagues = useLeagues(getSupabase(), {
+    getTeamId: () => backend.teamId || null,
+    getUserId: () => (backend.session && backend.session.user && backend.session.user.id) || null,
+  });
 
   const repository = backend.repository;
   useEffect(() => {

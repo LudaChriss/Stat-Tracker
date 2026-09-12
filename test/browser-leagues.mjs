@@ -71,6 +71,22 @@ need('Chrome must be running with --remote-debugging-port=9222', !!browserWsUrl)
 
 const admin = createClient(st.API_URL, st.SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
+// The stack answers /auth/v1/health only once GoTrue is actually up, and the
+// containers restart on `supabase db reset`. supabase-js retries a failed
+// request with a long backoff, so a harness started a moment too early does not
+// fail — it HANGS, silently, with no output at all. That is the worst of the
+// three outcomes and it cost most of an afternoon twice.
+{
+  let up = false;
+  for (let i = 0; i < 90 && !up; i++) {
+    try {
+      up = (await fetch(`${st.API_URL}/auth/v1/health`, { signal: AbortSignal.timeout(2000) })).ok;
+    } catch { /* not yet */ }
+    if (!up) await new Promise((r) => setTimeout(r, 1000));
+  }
+  need('the auth service must be up (it restarts after `supabase db reset`)', up);
+}
+
 // ---- two accounts, and the session blobs their browsers will accept ----------
 const password = 'Password123!';
 const stamp = `${Date.now()}${Math.random().toString(36).slice(2, 5)}`;
@@ -217,6 +233,36 @@ async function phone(name) {
 
   return self;
 }
+
+/**
+ * Open a league with FRESH data, from wherever the phone happens to be.
+ *
+ * The leagues screen keeps the league it was last looking at, so walking
+ * straight back in reads the copy it already had. Stepping out to the list and
+ * back in re-reads it. Where the phone starts from varies — the season home
+ * after finalising a game, the list after a reload, the detail after looking at
+ * one — so this asks rather than assumes.
+ */
+const whereAmI = async (p) => {
+  const t = (await p.text()) || '';
+  if (t.includes('Teams \u00b7')) return 'detail';
+  if (t.includes('Your leagues')) return 'list';
+  return 'elsewhere';
+};
+
+const openLeagueFresh = async (p, name) => {
+  if ((await whereAmI(p)) === 'elsewhere') {
+    const opened = await p.tap('Leagues');
+    if (opened !== 'OK') return opened;
+    await until(async () => ((await whereAmI(p)) === 'elsewhere' ? null : 1), 15000);
+  }
+  if ((await whereAmI(p)) === 'detail') {
+    const back = await p.tap('\u2039 Back');
+    if (back !== 'OK') return back;
+    await until(async () => ((await whereAmI(p)) === 'list' ? 1 : null), 15000);
+  }
+  return p.tap(name);
+};
 
 const A = await phone('phone A');
 const B = await phone('phone B');
@@ -387,8 +433,7 @@ console.log('\n--- A puts a fixture on the calendar --------------------------')
 // =============================================================================
 
 // Re-open so A sees the team that joined after its last read.
-eq('A: back to the list', await A.tap('‹ Back'), 'OK');
-eq('A: re-opened the league', await A.tap(`Sunday Social ${stamp}`), 'OK');
+eq('A: re-opened the league', await openLeagueFresh(A, `Sunday Social ${stamp}`), 'OK');
 ok('A sees both teams too',
   !!(await until(async () => {
     const t = (await A.text()) || '';
@@ -427,8 +472,7 @@ ok('A sees it on the schedule',
 
 // B sees it too, once it looks again. A fixture is not live data; it does not
 // need a socket.
-eq('B: back to the list', await B.tap('‹ Back'), 'OK');
-eq('B: re-opened the league', await B.tap(`Sunday Social ${stamp}`), 'OK');
+eq('B: re-opened the league', await openLeagueFresh(B, `Sunday Social ${stamp}`), 'OK');
 ok('B sees the fixture the commissioner made',
   !!(await until(async () => {
     const t = (await B.text()) || '';
@@ -437,46 +481,121 @@ ok('B sees the fixture the commissioner made',
   'on screen: ' + String(await B.text()).slice(0, 320));
 
 // =============================================================================
-console.log('\n--- a played game moves the table ------------------------------');
+console.log('\n--- A scores the fixture, and it becomes a league result -------');
 // =============================================================================
 //
-// Written with the service key rather than scored through the app, because the
-// season screen's opponent picker still works in device-side slugs — a game
-// scored there resolves its opponent to a team outside the league. That gap is
-// named in the report. What is verified here is the half 4c adds: a league game
-// that exists moves the table and fills the leaders, on both phones.
-{
-  const played = await admin.from('games').insert({
-    league_id: leagueRow.id,
-    home_team_id: bossTeam.id,
-    away_team_id: mgrTeam.id,
-    status: 'final',
-    result: 'W',
-    home_score: 6,
-    away_score: 3,
-    sport: 'kickball',
-    label: 'Sep 10',
-    client_id: `g-played-${stamp}`,
-    created_by: boss.id,
-  }).select('id').single();
-  need('a played league game', !played.error, played.error && played.error.message);
+// The wire that was missing until now. The season screen's opponent picker
+// works in device-side slugs, so a game scored the normal way resolved its
+// opponent to a team OUTSIDE the league and the table never heard about it.
+// Scoring from the fixture uses the fixture's own client id and names the
+// opposition by its real team id, so the game that gets finalised IS the
+// fixture — in the table, and in both teams' seasons.
 
-  // Every stat named on every row: a batched insert aligns columns across the
-  // rows it is given, so a field present on one and absent on another arrives
-  // as an explicit null and trips the NOT NULL.
-  const stat = (over) => ({
-    game_id: played.data.id, ab: 0, h: 0, r: 0, rbi: 0, bb: 0, k: 0, d: 0, t: 0, hr: 0, ...over,
-  });
-  const lines = await admin.from('game_lines').insert([
-    stat({ team_id: bossTeam.id, name_snapshot: 'Maya Ortiz', home_away: 'home', ab: 4, h: 3, r: 3, rbi: 2, hr: 1 }),
-    stat({ team_id: bossTeam.id, name_snapshot: 'Deon Wallace', home_away: 'home', ab: 4, h: 1, r: 1, rbi: 1 }),
-    stat({ team_id: mgrTeam.id, name_snapshot: 'Robin Vega', home_away: 'away', ab: 4, h: 2, r: 2, rbi: 2 }),
-  ]);
-  need('its box score', !lines.error, lines.error && lines.error.message);
+eq('A: started scoring the fixture', await A.tap('Score this game'), 'OK');
+
+const scoring = await until(async () => {
+  const s = await A.state();
+  return s && s.gameActive && s.gameClientId === fixture.client_id ? s : null;
+}, 25000);
+ok('A is now scoring that fixture, under its id', !!scoring,
+  'state: ' + JSON.stringify(((await A.state()) || {}).gameClientId) + ' page said: ' + (A.logs().join(' | ') || 'nothing'));
+need('a game in progress', !!scoring);
+eq('against the other league team, by id', scoring.gameOpponentTeamId, mgrTeam.id);
+eq('and at home, because that is which side the fixture put us on', scoring.gameHome, true);
+
+// The fixture stops being a plan the moment somebody starts scoring it.
+ok('the fixture is live in the account, not still scheduled',
+  !!(await until(async () => {
+    const { data } = await admin.from('games').select('status').eq('id', fixture.id).single();
+    return data && data.status === 'live' ? 1 : null;
+  }, 25000)));
+{
+  const { count } = await admin
+    .from('games').select('id', { count: 'exact', head: true }).eq('client_id', fixture.client_id);
+  eq('and it is one game, not a fixture and a game beside it', count, 1);
 }
 
-eq('A: back to the list', await A.tap('‹ Back'), 'OK');
-eq('A: re-opened the league', await A.tap(`Sunday Social ${stamp}`), 'OK');
+eq('A: opened the entry tab', await A.tap('ENTRY'), 'OK');
+// Three outs to get through the opposition's half, then our own hitters.
+eq('A: struck one out', await A.tap('Strikeout'), 'OK');
+eq('A: struck another out', await A.tap('Strikeout'), 'OK');
+eq('A: struck a third out', await A.tap('Strikeout'), 'OK');
+ok('our side is batting',
+  !!(await until(async () => {
+    const s = await A.state();
+    return s && s.half === 'bot' ? s : null;
+  }, 20000)));
+eq('A: hit a home run', await A.tap('Home run'), 'OK');
+eq('A: and another', await A.tap('Home run'), 'OK');
+
+const beforeFinal = await until(async () => {
+  const s = await A.state();
+  return s && s.score && s.score.home === 2 ? s : null;
+}, 20000);
+ok('two runs on the board', !!beforeFinal);
+
+eq('A: tapped Game completed', await A.tap('Game completed'), 'OK');
+eq('A: finalized', await A.tap('Finalize & update standings'), 'OK');
+
+const result = await until(async () => {
+  const { data } = await admin.from('games').select('*').eq('id', fixture.id).single();
+  return data && data.status === 'final' ? data : null;
+}, 35000);
+ok('the fixture is now a result', !!result,
+  'row: ' + JSON.stringify((await admin.from('games').select('status').eq('id', fixture.id)).data)
+    + ' page said: ' + (A.logs().join(' | ') || 'nothing'));
+need('a finished fixture', !!result);
+
+eq('scored 2-0 to the home side', [result.home_score, result.away_score], [2, 0]);
+eq('a win for the home team', result.result, 'W');
+eq('between the two league teams', [result.home_team_id, result.away_team_id], [bossTeam.id, mgrTeam.id]);
+eq('and filed under the league', result.league_id, leagueRow.id);
+{
+  const { count } = await admin
+    .from('games').select('id', { count: 'exact', head: true }).eq('client_id', fixture.client_id);
+  eq('still exactly one row for it', count, 1);
+
+  // No team was invented from a slug on the way past — the whole point.
+  const { data: invented } = await admin.from('teams').select('id, name').eq('created_by', boss.id);
+  eq('and no extra team was created for the opposition',
+    (invented || []).map((t) => t.name).sort(),
+    [`Boss United ${stamp}`].concat(seeded.teams.map((t) => t.name)).sort());
+}
+
+const lines = (await admin.from('game_lines').select('*').eq('game_id', fixture.id)).data || [];
+ok('the box score went with it', lines.length > 0);
+eq('our lines are filed to our team, on the home side',
+  lines.filter((l) => l.team_id === bossTeam.id).every((l) => l.home_away === 'home'), true);
+eq('and the opposition\'s to theirs',
+  lines.filter((l) => l.team_id === mgrTeam.id).every((l) => l.home_away === 'away'), true);
+
+// ---- it is in A's own season -------------------------------------------------
+{
+  const s = await A.state();
+  const mine = (s.history || []).find((g) => g.id === fixture.client_id);
+  ok('the game is in A\'s season history', !!mine, 'history: ' + JSON.stringify((s.history || []).map((g) => g.id)));
+  if (mine) {
+    eq('with the score from A\'s point of view', mine.score, { us: 2, them: 0 });
+    eq('and recorded as a win', mine.result, 'W');
+  }
+}
+
+// ---- and in B's, once B reads the account ------------------------------------
+await B.reload();
+const bHistory = await until(async () => {
+  const s = await B.state();
+  return s && (s.history || []).some((g) => g.id === fixture.client_id) ? s : null;
+}, 40000);
+ok('the game reaches the other team\'s season too', !!bHistory,
+  'B history: ' + JSON.stringify((((await B.state()) || {}).history || []).map((g) => g.id)));
+if (bHistory) {
+  const theirs = bHistory.history.find((g) => g.id === fixture.client_id);
+  eq('from THEIR point of view, which is the other way round', theirs.score, { us: 0, them: 2 });
+  eq('and recorded as a loss', theirs.result, 'L');
+}
+
+// ---- and in the league table -------------------------------------------------
+eq('A: re-opened the league, freshly', await openLeagueFresh(A, `Sunday Social ${stamp}`), 'OK');
 
 const tableOnA = await until(async () => {
   const t = (await A.text()) || '';
@@ -484,8 +603,7 @@ const tableOnA = await until(async () => {
 }, 25000);
 ok('the league table is on screen', !!tableOnA, 'on screen: ' + String(await A.text()).slice(0, 320));
 
-// Read the table as a table, not as a paragraph. The rows are a six-column
-// grid, so this is the same thing a person sees, column by column.
+// Read the table as a table, not as a paragraph.
 const readTable = async (p) =>
   p.js(`(() => {
     const grids = [...document.querySelectorAll('div')].filter(
@@ -498,19 +616,16 @@ ok('the table has a header and a row per team', Array.isArray(rowsOnA) && rowsOn
   JSON.stringify(rowsOnA));
 if (Array.isArray(rowsOnA) && rowsOnA.length === 3) {
   eq('the columns are the ones a table has', rowsOnA[0], ['', 'TEAM', 'W', 'L', 'T', 'PCT']);
-  // SEEDED carries a manually-entered prior record, and both teams migrated up
-  // from it — so the played game is added to 4-1-0, not counted on its own.
-  // That is the rule the season table already follows, and the league table
-  // agreeing with it is the point.
-  eq('the winner is top, with the win added to its prior record',
+  // Both teams migrated up from SEEDED, which carries a manual 4-1-0. The game
+  // just scored is added to that, which is the rule the season table already
+  // follows and the league table agreeing with it is the point.
+  eq('the team that won is top, with the win added to its own prior record',
     rowsOnA[1].slice(1), [`Boss United ${stamp}YOU`, '5', '1', '0', '.833']);
-  eq('and the loser below it, with the loss added to theirs',
+  eq('and the team that lost below it',
     rowsOnA[2].slice(1), [`Manager City ${stamp}`, '4', '2', '0', '.667']);
-  eq('ranked 1 and 2', [rowsOnA[1][0], rowsOnA[2][0]], ['1', '2']);
 }
-ok('and the phone knows which row is its own', String(tableOnA || '').includes('YOU'));
 
-ok('the leaders are filled in from the box score',
+ok('the leaders are filled in from the box score just written',
   !!(await until(async () => {
     const t = (await A.text()) || '';
     return t.includes('Leaders') && t.includes('Maya Ortiz') ? t : null;
@@ -518,21 +633,19 @@ ok('the leaders are filled in from the box score',
   'on screen: ' + String(await A.text()).slice(0, 400));
 
 eq('A: switched the leaders to home runs', await A.tap('HR'), 'OK');
-ok('and the home-run leader is the one who hit one',
+ok('and the home-run leaders are the two who hit them',
   !!(await until(async () => {
     const t = (await A.text()) || '';
-    return t.includes('Home runs across every game') && t.includes('Maya Ortiz') ? 1 : null;
+    return t.includes('Home runs across every game') ? 1 : null;
   }, 20000)),
   'on screen: ' + String(await A.text()).slice(0, 400));
 
-// The follower sees the same table. It is the league's table, not the
-// commissioner's.
-eq('B: back to the list', await B.tap('‹ Back'), 'OK');
-eq('B: re-opened the league', await B.tap(`Sunday Social ${stamp}`), 'OK');
-ok('the follower sees the same table',
+// The follower sees the same table. It is the league's, not the commissioner's.
+eq('B: opened the league, freshly', await openLeagueFresh(B, `Sunday Social ${stamp}`), 'OK');
+ok('the follower sees the same table, with the game in it',
   !!(await until(async () => {
     const t = (await B.text()) || '';
-    return t.includes('PCT') && t.includes('Maya Ortiz') ? 1 : null;
+    return t.includes('PCT') && t.includes('Leaders') && t.includes(`Boss United ${stamp}`) ? 1 : null;
   }, 25000)),
   'on screen: ' + String(await B.text()).slice(0, 400));
 

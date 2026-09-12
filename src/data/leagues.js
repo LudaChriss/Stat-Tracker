@@ -23,7 +23,7 @@ export const LEAGUE_ROLE_BLURB = {
 /** The roles a league code can grant, in the order a person would consider them. */
 export const LEAGUE_INVITABLE_ROLES = ['viewer', 'league_admin'];
 
-export function createLeagues(client) {
+export function createLeagues(client, { getUserId = null } = {}) {
   const noBackend = { error: { message: 'No backend is configured on this build.' } };
 
   return {
@@ -38,10 +38,30 @@ export function createLeagues(client) {
      */
     async mine() {
       if (!client) return { leagues: [], error: null };
+      // Scoped to THIS user's rows, explicitly.
+      //
+      // `memberships_select_own` also admits every membership on a league you
+      // administer — which is right, an admin needs to see who is in their
+      // league — but it means an unfiltered read returns one row per MEMBER,
+      // not one per league. The league then appears once per person in it, with
+      // somebody else's role on it. Caught by a duplicate-key warning in a
+      // browser harness that requires a silent console.
+      let uid = getUserId ? getUserId() : null;
+      if (!uid) {
+        // Reads what is already on the device; no network round trip.
+        const { data: session } = await client.auth.getSession();
+        uid = (session && session.session && session.session.user && session.session.user.id) || null;
+      }
+      // Not knowing who we are is not a reason to answer with somebody else's
+      // rows. "Leagues I am in" is unanswerable without an identity, and an
+      // empty list is the honest answer.
+      if (!uid) return { leagues: [], error: null };
+
       const { data, error } = await client
         .from('memberships')
         .select('role, league_id, leagues(id, name, sport, visibility)')
-        .not('league_id', 'is', null);
+        .not('league_id', 'is', null)
+        .eq('user_id', uid);
       if (error) return { leagues: [], error };
       const leagues = (data || [])
         .filter((m) => m.leagues)

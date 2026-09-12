@@ -489,7 +489,15 @@ export function buildGameRecord(s, options = {}) {
     label: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     opponentId: s.opponentId,
     opponent: opponentTeam(s).name,
-    home: true,
+    // The opposing team's real id, when this game is against one — a league
+    // fixture rather than a name typed into this phone. Null for every game
+    // scored the way they always have been.
+    opponentTeamId: s.gameOpponentTeamId || null,
+    // Which dugout we are in. Every game scored from the season screen is at
+    // home, which is what this was hard-coded to; a league fixture says which,
+    // because the score is filed from the HOME team's point of view and
+    // getting it the wrong way round inverts the result.
+    home: s.gameHome !== false,
     score: { us, them },
     // A game called level is a tie, not a win — the design's `>=` treated it
     // as a win, which would misreport the standings.
