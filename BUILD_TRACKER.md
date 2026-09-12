@@ -2,9 +2,19 @@
 
 All four slices built and green, plus **4e** — the wire between a fixture and a
 scored game — added before merging. On branch **`phase-4`**, nothing pushed and
-the hosted project untouched. **1213 assertions across 36 suites** (up from 1044
+the hosted project untouched. **1237 assertions across 37 suites** (up from 1044
 across 33), build clean, viewport audit clean, and all seven browser harnesses
 re-run and passing.
+
+**Follow-up before merging: a game in progress has a place on the league
+screen.** 4e made a fixture go `live` when somebody starts scoring it, and the
+league screen only had lists for `scheduled` and `final` — so the game vanished
+from the league for as long as it was being played. It now sits under **In
+progress**, between Schedule and Played, saying which team is scoring it. §3 has
+the detail; §4 has what is still open about it. That pass re-ran
+`browser-leagues`, `browser-team-switch` and `browser-two-phones` and the full
+viewport audit; the other four harnesses were not re-run for it, and nothing
+they drive was changed.
 
 **Read §5 and §6 before you deploy.** Four new migrations. Three of them replace
 functions the live app calls, and the order is **migrations first this time** —
@@ -50,6 +60,21 @@ phone B's as a loss, which is the same game from the other dugout. Then the
 table, read column by column off the screen: the winner top with the win added
 to its own prior record, the loser below, and the leaders filled in from the box
 score that was just written.
+
+**Mid-game, from the other team's phone:** while A is scoring, B reopens the
+league and finds the fixture under **In progress · 1** and not on the schedule
+or among the results, on the same fixture card, reading "Scored by" A's team,
+with no "Score this game" button on it. The start event in the account is
+checked to name A's team and A's user. Once it is finalised, the game has left
+In progress for Played.
+
+**And the league screen goes through the viewport audit** — the same
+measurement `viewports.mjs` uses, imported from one shared module, at all four
+iPhone sizes — twice: mid-game with In progress showing, and after the result
+with the table and leaders. It cannot be reached by `viewports.mjs` itself,
+which restores state from storage and has no account. Before trusting a clean
+result, the harness plants an element too wide for the screen inside it and
+requires the audit to catch it.
 
 **`test/browser-team-switch.mjs`** — one account managing two teams, and a
 second account that only scores for one of them. The switcher lists both, marks
@@ -100,9 +125,16 @@ from the roster leaves the order with them.
   once as the league sees them and once as a team's own season does, required to
   give the same W-L-T, games played and percentage. If those two ever drift, one
   of the two tables on a person's phone is lying about the same team.
+- **`league-buckets-check.mjs`** (24 assertions) — every league game is in
+  exactly one of Schedule, In progress and Played, a cancelled game is in none,
+  one fixture walks scheduled → in progress → played, and the scorer line: "you"
+  only to the person whose start it was, otherwise the team, and never a guess
+  when the start does not say.
 - The **"leagues need an account"** state of the league screen is measured by
-  the viewport audit; its signed-in states are measured by hand in the browser
-  harness, not by the audit.
+  `viewports.mjs`. Its signed-in states — a league with a game in progress, and
+  one with a table and leaders — are measured by `browser-leagues.mjs` with the
+  same yardstick (see above). A league with fixtures still on the schedule is
+  not measured at a phone size.
 - The **team switcher's "changes have not reached your account yet" warning**
   renders from code inspection only. The switch itself is driven in a browser;
   that particular banner needs an account with a stuck queue, which no harness
@@ -264,6 +296,48 @@ harness failed intermittently showing first-run setup. Both new harnesses now
 inject on the new document, before any of the app's scripts run, and remove the
 injection afterwards so later reloads are the app's own.
 
+**A league game disappeared from the league for as long as it was being
+played.** A regression from 4e, caught before merging. `_022`'s
+`start_live_game` flips a fixture from `scheduled` to `live` when somebody
+starts scoring it — correctly — but the league screen's two lists filtered on
+`scheduled` and `final`, so a live fixture was on neither. Nobody following the
+league could see a game was on, and it came back only when it was finalised.
+The screen now sorts games through one function with a home for each status
+(`bucketLeagueGames`), cancelled in none, and live games get their own **In
+progress** section on the same fixture card.
+
+Two decisions inside that, both deliberate:
+
+- **"Who is scoring it" names a team, not a person.** `profiles` is readable
+  only by its owner, and showing a scorer's name to every follower of a public
+  league is a policy change that wants a migration and an attack test, not a
+  label. The fixture's start event now carries the scoring team's id, read back
+  from the log (which is readable wherever the game is). The person scoring is
+  told it is them; everyone else sees "Scored by" the team; a game started before
+  this change says only "Being scored". No migration; `save_game` untouched.
+- **An in-progress card has no "Score this game" button.** That button starts
+  the fixture, which appends a `start` event, and a second start on a log that
+  already has plays in it folds back to the starting state — it would reset the
+  game on every phone watching. A phone on one of the teams is already offered
+  to join it, which is the safe way in.
+
+**The viewport audit could not see inside a scrolling screen.** Its check for
+elements running off the edge skips anything inside a sideways scroller, so that
+a strip meant to scroll is not flagged. But CSS computes `overflow-x` to `auto`
+on anything that sets `overflow-y`, so every screen that scrolls vertically
+counted as a sideways scroller and **nothing inside it was checked**; a card too
+wide for the phone would be clipped by the screen rather than widening the page,
+and the page-width check would not see that either. A second measurement now asks
+each clipping container whether it holds more than it shows, ignoring strips that
+declare their own sideways scroll and text that ends in an ellipsis on purpose.
+Run over all 60 screen×viewport combinations it finds nothing, so no earlier
+"clean" was hiding a real overflow — but until now that was not known.
+
+**The league leaders' stat chips were 30px wide.** "R" and "H" are one letter,
+and the chips had a minimum height and no minimum width. From 4c; no audit had
+ever reached a league with leaders on it. Found the first time one did, and
+given a 44px minimum width.
+
 **`roles-check.mjs`'s fixture created a team directly inside a league its
 manager had never joined** — precisely what the new guard stops. The fixture now
 creates the team outside and places it with the service key, as it already did
@@ -288,6 +362,17 @@ something to go and find.
 
 Also outstanding:
 
+- **A fixture that goes live and is then abandoned is stuck.** A fixture flipped
+  to `live` by `_022` fell out of both Schedule and Played on the league screen,
+  cannot be rescheduled (`schedule_game` refuses a game that is already live),
+  and resurfaced only as a join offer on a phone on one of its two teams. **The
+  first half is fixed** (§3): it is listed under In progress now. **The rest is
+  not.** A live fixture nobody finishes still cannot be moved, and stays In
+  progress — and offered to join — indefinitely, which is phase 3's stale live
+  row (phase 3 §4) with a league attached. It needs a way to abandon a stale
+  live game and a decision about whether an abandoned fixture returns to the
+  schedule; both are next session's, and `schedule_game` was deliberately not
+  touched here.
 - **No way to see or revoke a league's outstanding codes.** Same gap the team
   invites have had since 2c. A code is shown once and never again.
 - **No UI for making a league private.** The column, the policies and the

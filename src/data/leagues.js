@@ -109,19 +109,38 @@ export function createLeagues(client, { getUserId = null } = {}) {
       // separately and only when there are any, because a league with a
       // schedule and no results yet should cost one round trip, not two.
       const finalIds = (games.data || []).filter((g) => g.status === 'final').map((g) => g.id);
+      const liveIds = (games.data || []).filter((g) => g.status === 'live').map((g) => g.id);
       let lines = [];
-      if (finalIds.length) {
-        const got = await client.from('game_lines').select('*').in('game_id', finalIds);
-        // A failed read of the lines costs the leaders table and nothing else,
-        // so it is not worth failing the whole league over.
-        if (!got.error) lines = got.data || [];
-      }
+      let starts = [];
+      await Promise.all([
+        (async () => {
+          if (!finalIds.length) return;
+          const got = await client.from('game_lines').select('*').in('game_id', finalIds);
+          // A failed read of the lines costs the leaders table and nothing else,
+          // so it is not worth failing the whole league over.
+          if (!got.error) lines = got.data || [];
+        })(),
+        (async () => {
+          // Who is scoring a game in progress: the start event of each, which
+          // is readable wherever the game is. Same reasoning as the lines — a
+          // failure costs one line of text on a card, not the league.
+          if (!liveIds.length) return;
+          const got = await client
+            .from('game_events')
+            .select('game_id, seq, actor, payload')
+            .in('game_id', liveIds)
+            .eq('kind', 'start')
+            .order('seq');
+          if (!got.error) starts = got.data || [];
+        })(),
+      ]);
 
       return {
         league: league.data,
         teams: teams.data || [],
         games: games.data || [],
         lines,
+        scorers: scorersByGame(starts),
         error: null,
       };
     },
@@ -180,6 +199,64 @@ export function createLeagues(client, { getUserId = null } = {}) {
       return { error: error || null };
     },
   };
+}
+
+/**
+ * A league's games, in the three lists the league screen shows.
+ *
+ * Every status that means something to a person has exactly one home. Until
+ * 4e a fixture was either on the schedule or played, so two filters covered
+ * it; once "Score this game" flipped a fixture to `live`, it fell out of both
+ * and could only be found as a join offer on a phone on one of its teams.
+ *
+ * `cancelled` is in none of them, deliberately: a cancelled game was not
+ * played and is no longer planned, and listing it would invite somebody to
+ * wait for it.
+ */
+export function bucketLeagueGames(games) {
+  const out = { fixtures: [], inProgress: [], played: [] };
+  for (const g of games || []) {
+    if (g.status === 'scheduled') out.fixtures.push(g);
+    else if (g.status === 'live') out.inProgress.push(g);
+    else if (g.status === 'final') out.played.push(g);
+  }
+  return out;
+}
+
+/**
+ * The first start event of each game, as `{ [gameId]: { teamId, actor } }`.
+ *
+ * The first, because a log can in principle hold more than one start and the
+ * team that opened the game is the one that has it. Rows may arrive in any
+ * order; lowest seq wins.
+ */
+export function scorersByGame(startRows) {
+  const firstSeq = {};
+  const out = {};
+  for (const r of startRows || []) {
+    const seq = r.seq == null ? Infinity : Number(r.seq);
+    if (r.game_id in firstSeq && firstSeq[r.game_id] <= seq) continue;
+    firstSeq[r.game_id] = seq;
+    out[r.game_id] = { teamId: (r.payload && r.payload.teamId) || null, actor: r.actor || null };
+  }
+  return out;
+}
+
+/**
+ * The line on an in-progress card that says who has the game.
+ *
+ * A TEAM, never a person. Profiles are readable only by their owner, and
+ * putting a scorer's name in front of every follower of a public league is a
+ * decision for a migration and a policy, not for a label. The one person it
+ * can name is the one looking at it.
+ */
+export function scorerLine(scorer, { teams = [], userId = null } = {}) {
+  if (scorer && userId && scorer.actor === userId) return 'You’re scoring this';
+  const team = scorer && scorer.teamId ? teams.find((t) => t.id === scorer.teamId) : null;
+  if (team) return `Scored by ${team.name}`;
+  // Started before the start event said which side it was, or the read of it
+  // failed. Still honest: somebody is scoring it.
+  return 'Being scored';
 }
 
 /** Codes are shown in caps and typed by hand; be forgiving about how. */

@@ -133,6 +133,9 @@ function GameApp({ repository, backend, leagues, onSignIn, onSignOut, parked, on
             // Which team in the account this device is looking at. The league
             // screen needs it to say "yours" and to know what it can bring in.
             teamId: backend.teamId || null,
+            // Who is looking, so an in-progress fixture can say "you're scoring
+            // this" to the one person it is true of.
+            userId: (backend.session && backend.session.user && backend.session.user.id) || null,
           },
           leagues,
         }}

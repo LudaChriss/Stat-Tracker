@@ -643,6 +643,10 @@ export function useGame(injectedRepository) {
           at: startedAt,
           payload: {
             gameClientId: fixture.client_id,
+            // Which of the fixture's two teams is doing the scoring. Nothing
+            // replays it; it is what lets the league screen say who has the
+            // game in progress without reading anybody's profile.
+            teamId: home !== false ? fixture.home_team_id : fixture.away_team_id,
             sport: fixture.sport || s.sport,
             opponentId: slug,
             trackMode: s.trackMode,

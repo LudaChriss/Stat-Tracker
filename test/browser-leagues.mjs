@@ -515,6 +515,85 @@ ok('the fixture is live in the account, not still scheduled',
   eq('and it is one game, not a fixture and a game beside it', count, 1);
 }
 
+// ---- and it is on the league screen while it is being played -----------------
+//
+// Until this was pinned, a live fixture fell out of BOTH lists — no longer
+// scheduled, not yet played — and the league showed nothing at all while a game
+// was visibly in progress. Checked from B's phone: on the other team, not the
+// one scoring, which is the person who most needs to see it.
+{
+  const start = await until(async () => {
+    const { data } = await admin
+      .from('game_events').select('payload, actor').eq('game_id', fixture.id).eq('kind', 'start');
+    return (data || [])[0] || null;
+  }, 25000);
+  ok('the start event reached the account', !!start);
+  if (start) {
+    eq('and it says which team is scoring', start.payload.teamId, bossTeam.id);
+    eq('and who', start.actor, boss.id);
+  }
+}
+
+// The viewport audit's own yardstick, run on a screen the audit cannot reach by
+// itself: signed in, over the network, with a game in progress on it.
+const { VIEWPORTS, MEASURE, CLIPPED } = await import('./viewport-measure.mjs');
+const auditLeagueScreen = async (p, when) => {
+  for (const [vp, w, h, dsf] of VIEWPORTS) {
+    await p.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: dsf, mobile: false });
+    await sleep(400);
+    const m = await p.js(MEASURE);
+    const clipped = await p.js(CLIPPED);
+    ok(`${when}, ${vp}: nothing runs off the side`,
+      m && !m.ERR && m.overflow <= 0 && !m.wide.length, JSON.stringify(m));
+    ok(`${when}, ${vp}: nothing is clipped inside the scrolling screen`,
+      Array.isArray(clipped) && !clipped.length, JSON.stringify(clipped));
+    ok(`${when}, ${vp}: every control is big enough to hit`,
+      m && m.smallCount === 0, JSON.stringify(m && m.small));
+  }
+  await p.send('Emulation.setDeviceMetricsOverride', { width: 393, height: 852, deviceScaleFactor: 2, mobile: false });
+  await sleep(300);
+};
+
+eq('B: re-opened the league mid-game', await openLeagueFresh(B, `Sunday Social ${stamp}`), 'OK');
+{
+  const midGame = await until(async () => {
+    const t = (await B.text()) || '';
+    return t.includes('In progress · 1') ? t : null;
+  }, 25000);
+  ok('B sees the game under In progress', !!midGame, 'on screen: ' + String(await B.text()).slice(0, 500));
+  if (midGame) {
+    eq('it is off the schedule', midGame.includes('Schedule · 0'), true);
+    eq('and not listed as played', midGame.includes('Played ·'), false);
+    eq('the same fixture card', midGame.includes(`Boss United ${stamp} vs Manager City ${stamp}`), true);
+    eq('saying which team is scoring it', midGame.includes(`Scored by Boss United ${stamp}`), true);
+    // A second start on a log with plays in it would reset the game for both
+    // phones. Joining is the way in, and it is offered elsewhere.
+    eq('with no way to start it a second time', midGame.includes('Score this game'), false);
+    const order = ['Schedule · 0', 'In progress · 1'].map((s) => midGame.indexOf(s));
+    eq('and In progress comes after the schedule', order[0] < order[1], true);
+  }
+
+  // An audit that finds nothing has to be able to find something. Plant a card
+  // too wide for the screen inside it, and the check must say so.
+  const planted = await B.js(`(() => {
+    const card = [...document.querySelectorAll('div')].find(
+      (d) => (d.textContent || '').trim().startsWith('In progress'));
+    if (!card) return 'MISS';
+    const wide = document.createElement('div');
+    wide.id = 'audit-plant';
+    wide.style.width = '900px';
+    wide.style.height = '10px';
+    card.parentElement.appendChild(wide);
+    return 'OK';
+  })()`);
+  eq('planted an over-wide element in the league screen', planted, 'OK');
+  const caught = await B.js(CLIPPED);
+  ok('the audit catches it', Array.isArray(caught) && caught.length > 0, JSON.stringify(caught));
+  await B.js(`document.getElementById('audit-plant').remove(), 1`);
+
+  await auditLeagueScreen(B, 'league screen, game in progress');
+}
+
 eq('A: opened the entry tab', await A.tap('ENTRY'), 'OK');
 // Three outs to get through the opposition's half, then our own hitters.
 eq('A: struck one out', await A.tap('Strikeout'), 'OK');
@@ -648,6 +727,12 @@ ok('the follower sees the same table, with the game in it',
     return t.includes('PCT') && t.includes('Leaders') && t.includes(`Boss United ${stamp}`) ? 1 : null;
   }, 25000)),
   'on screen: ' + String(await B.text()).slice(0, 400));
+{
+  const t = (await B.text()) || '';
+  eq('and the finished game has left In progress', t.includes('In progress ·'), false);
+  eq('for Played', t.includes('Played · 1'), true);
+  await auditLeagueScreen(B, 'league screen, table and results');
+}
 
 // =============================================================================
 console.log('\n--- leaving is never a favour ---------------------------------');

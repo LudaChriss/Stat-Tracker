@@ -62,7 +62,10 @@ Write the script to a file and run the file.
 - `npm test` runs every suite in `test/` (auto-discovered by `test/run.mjs`).
 - `test/viewports.mjs` is the responsive audit. It needs a dev server on :5173
   and Chrome on `--remote-debugging-port=9222`; it is run manually, not by
-  `npm test`.
+  `npm test`. Its measurements live in `test/viewport-measure.mjs` so a browser
+  harness can audit a state `viewports.mjs` cannot restore from storage
+  (`browser-leagues.mjs` does, for the signed-in league screen) — import them
+  rather than writing a second definition of "fits".
 - Suites that need the database skip cleanly without a local Supabase, so
   `npm test` still passes on a machine with no Docker.
 - Browser harnesses are run by hand, not by `npm test`: `browser-save-game.mjs`,

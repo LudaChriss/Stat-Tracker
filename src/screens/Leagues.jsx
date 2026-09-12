@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { C, btn, tnum } from '../theme.js';
 import { Avatar, Card, Section } from '../components/ui.jsx';
-import { LEAGUE_INVITABLE_ROLES, LEAGUE_ROLE_BLURB, LEAGUE_ROLE_LABEL, normalizeCode } from '../data/leagues.js';
+import {
+  LEAGUE_INVITABLE_ROLES,
+  LEAGUE_ROLE_BLURB,
+  LEAGUE_ROLE_LABEL,
+  bucketLeagueGames,
+  normalizeCode,
+  scorerLine,
+} from '../data/leagues.js';
 import { leagueLeaders, leagueStandings, statLabel } from '../game/leagueTables.js';
 import { initials } from '../game/logic.js';
 import { rateString } from '../game/stats.js';
@@ -358,8 +365,30 @@ function Table({ rows, myTeamId }) {
   );
 }
 
+/**
+ * A fixture: when, and who. Shared by the schedule and the games in progress,
+ * so a game that has started still looks like the thing that was on the
+ * calendar; what goes under it is up to the section.
+ */
+function FixtureCard({ game: g, teamName, children }) {
+  return (
+    <Card style={{ padding: '12px 14px', marginBottom: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.coral }}>{g.label || 'FIXTURE'}</div>
+      <div style={{ fontSize: 14.5, fontWeight: 800, marginTop: 2, overflowWrap: 'anywhere' }}>
+        {teamName(g.home_team_id)} vs {teamName(g.away_team_id)}
+      </div>
+      <div style={{ ...label, marginTop: 2, ...tnum }}>
+        {new Date(g.scheduled_at).toLocaleString('en-US', {
+          weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        })}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
 /** One league: its teams, its fixtures, and what a commissioner can do to them. */
-function LeagueDetail({ leagues, actions, myTeamId, onScoreFixture }) {
+function LeagueDetail({ leagues, actions, myTeamId, userId, onScoreFixture }) {
   const { detail, busy, error, code, notice } = leagues;
   const { league, teams, games, role } = detail;
   const lines = detail.lines || [];
@@ -386,8 +415,8 @@ function LeagueDetail({ leagues, actions, myTeamId, onScoreFixture }) {
     return t ? t.name : 'A team';
   };
 
-  const fixtures = games.filter((g) => g.status === 'scheduled');
-  const played = games.filter((g) => g.status === 'final');
+  const { fixtures, inProgress, played } = bucketLeagueGames(games);
+  const scorers = detail.scorers || {};
 
   return (
     <div style={{ padding: 16 }}>
@@ -433,6 +462,10 @@ function LeagueDetail({ leagues, actions, myTeamId, onScoreFixture }) {
                     borderRadius: 99,
                     padding: '0 10px',
                     minHeight: 44,
+                    // "R" and "H" are one letter; without this they are 30px
+                    // wide, which the viewport audit caught once it could reach
+                    // this screen.
+                    minWidth: 44,
                     fontSize: 11.5,
                     fontWeight: 800,
                     ...btn,
@@ -527,16 +560,7 @@ function LeagueDetail({ leagues, actions, myTeamId, onScoreFixture }) {
         const otherId = g.home_team_id === myTeamId ? g.away_team_id : g.home_team_id;
         const other = teams.find((t) => t.id === otherId);
         return (
-          <Card key={g.id} style={{ padding: '12px 14px', marginBottom: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.coral }}>{g.label || 'FIXTURE'}</div>
-            <div style={{ fontSize: 14.5, fontWeight: 800, marginTop: 2, overflowWrap: 'anywhere' }}>
-              {teamName(g.home_team_id)} vs {teamName(g.away_team_id)}
-            </div>
-            <div style={{ ...label, marginTop: 2, ...tnum }}>
-              {new Date(g.scheduled_at).toLocaleString('en-US', {
-                weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-              })}
-            </div>
+          <FixtureCard key={g.id} game={g} teamName={teamName}>
             {mine && other && (
               <button
                 onClick={() =>
@@ -559,9 +583,42 @@ function LeagueDetail({ leagues, actions, myTeamId, onScoreFixture }) {
                 Score this game
               </button>
             )}
-          </Card>
+          </FixtureCard>
         );
       })}
+
+      {inProgress.length > 0 && (
+        <>
+          <div style={{ height: 14 }} />
+          <Section>In progress · {inProgress.length}</Section>
+          {inProgress.map((g) => (
+            // No "Score this game" here. Starting a fixture appends a start
+            // event, and a second start on a log that already has plays in it
+            // resets the game for every phone watching. A phone on one of the
+            // teams is offered to JOIN it instead, which is the safe way in.
+            <FixtureCard key={g.id} game={g} teamName={teamName}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  marginTop: 8,
+                  fontSize: 12.5,
+                  fontWeight: 800,
+                  color: C.teal,
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{ width: 8, height: 8, borderRadius: 99, background: C.teal, flex: '0 0 auto' }}
+                />
+                {scorerLine(scorers[g.id], { teams, userId })}
+              </div>
+            </FixtureCard>
+          ))}
+        </>
+      )}
 
       {played.length > 0 && (
         <>
@@ -736,6 +793,7 @@ export default function Leagues({ v, actions }) {
           leagues={leagues}
           actions={la}
           myTeamId={v.account.teamId}
+          userId={v.account.userId}
           onScoreFixture={actions.startFixture}
         />
       ) : (
