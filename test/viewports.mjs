@@ -37,6 +37,15 @@ const SCREENS = [
   // state without waiting on a network round trip. The signed-in states of
   // this screen are measured by hand in browser-leagues.mjs.
   ['leagues',    { ...withGame, screen: 'leagues' }],
+  // A game nobody has scored for four hours: its STOPPED card on the season
+  // screen, and the banner inside the game. Restorable from storage because
+  // nothing without an account refreshes the offer or polls the game. The sheets
+  // those open are deliberately not restored by a reload, so they cannot be
+  // reached from here; browser-abandon.mjs audits both at all four sizes.
+  ['league-stopped', { ...withGame, screen: 'league',
+    joinable: { gameId: 'g-stale', clientId: 'c-stale', lastActivityAt: Date.now() - 4 * 3600e3, lastSeq: 40, plays: 38, home: true } }],
+  ['live-stopped', { ...live, screen: 'live', liveTab: 'entry', liveGameId: 'g-stale',
+    serverLog: [{ clientEventId: 'e-old', seq: 1, kind: 'start', at: new Date(Date.now() - 4 * 3600e3).toISOString(), payload: {} }] }],
 ];
 
 const t=(await (await fetch('http://localhost:9222/json')).json()).find(x=>x.type==='page');

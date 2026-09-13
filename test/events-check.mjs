@@ -117,6 +117,21 @@ eq('an empty log replays to nothing', replay(SEASON, []), null);
   const straight = replay(SEASON, [start(), strikeout(), strikeout(), strikeout(), single(), homer(), single()]);
   eq('play carries on from a resumed game', carried.score, straight.score);
   eq('and the next hitter is the right one', carried.kiHome, straight.kiHome);
+
+  // A resume is only ever the opening event. A phone that had joined — and so
+  // had a log from the account but none of its own — used to append one on
+  // reopening, carrying its last saved snapshot; everyone then folded the game
+  // back to it. Here the snapshot is from two plays ago.
+  const stale = ev('resume', { gameClientId: 'g-1000', state: { ...liveSlice(played), undoStack: [] } });
+  const log = [start(), strikeout(), strikeout(), strikeout(), single(), homer(), single(), homer(), stale];
+  const truth = replay(SEASON, log.slice(0, -1));
+  const folded = replay(SEASON, log);
+  eq('a resume appended to a game already under way changes nothing', folded.score, truth.score);
+  eq('not the stat lines either', folded.gameStats, truth.gameStats);
+  eq('and play after it carries on from the real game', replay(SEASON, [...log, single()]).score, replay(SEASON, [...log.slice(0, -1), single()]).score);
+  const inc = createReplayer();
+  inc(SEASON, log.slice(0, -1));
+  eq('folding it incrementally, on the end of a cached game, changes nothing too', inc(SEASON, log).score, truth.score);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +258,20 @@ eq('an empty log replays to nothing', replay(SEASON, []), null);
   eq('a finalised log says so', logStatus([start(), ev('final')]), 'final');
   const s = replay(SEASON, [start(), single(), ev('cancel')]);
   eq('a cancelled game is no longer active', s.gameActive, false);
+
+  // A call is a claim until the account writes the game. The phone that calls
+  // it appends the event BEFORE checking its box score against the log; if they
+  // disagree, nothing is written and play goes on. Folding the event as the end
+  // of the game took every phone out of a game the account still had open.
+  const called = replay(SEASON, [start(), single(), ev('final')]);
+  eq('a called game is marked as called', called.finalized, true);
+  eq('but is still active in the fold — the account decides whether it ended', called.gameActive, true);
+  const refused = replay(SEASON, [start(), single(), ev('final'), homer()]);
+  eq('a call that play carried on after did not stand', refused.finalized, false);
+  eq('and the play after it counts', refused.score.home + refused.score.away > called.score.home + called.score.away, true);
+  eq('a log whose call was followed by play is live again', logStatus([start(), single(), ev('final'), homer()]), 'live');
+  eq('a second call after that is a call again', logStatus([start(), ev('final'), single(), ev('final')]), 'final');
+  eq('nothing revives a cancelled log', logStatus([start(), ev('cancel'), single()]), 'cancelled');
 }
 
 // ---------------------------------------------------------------------------

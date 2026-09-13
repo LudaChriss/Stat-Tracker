@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import IOSDevice from './ios/IOSDevice.jsx';
 import { useGame } from './game/useGame.js';
 import { deriveView } from './game/derive.js';
+import { useNow } from './game/useNow.js';
 import { C, FONT } from './theme.js';
 
 import LeagueHome from './screens/LeagueHome.jsx';
@@ -81,7 +82,10 @@ function useFullBleed() {
 
 function GameApp({ repository, backend, leagues, onSignIn, onSignOut, parked, onOpenParked, onInvite, onJoin, onSwitchTeam }) {
   const { state, actions } = useGame(repository);
-  const v = useMemo(() => deriveView(state, actions), [state, actions]);
+  // Re-derived on a slow tick as well as on every change, so "no plays for 3 hr"
+  // becomes true while nobody is touching the phone.
+  const now = useNow();
+  const v = useMemo(() => deriveView(state, actions, { now }), [state, actions, now]);
 
   const Screen = SCREENS[state.screen];
   const fullBleed = useFullBleed();

@@ -432,6 +432,12 @@ export function createSupabaseRepository(client, { getTeamId, getUserId = null, 
     /** Mark a live game abandoned. The log is kept; the tombstone is the point. */
     cancelLiveGame: (gameId) => live.cancelGame(gameId),
 
+    /** The account's word on whether a game is over. */
+    gameStatus: (gameId) => live.gameStatus(gameId),
+
+    /** End a stopped game on someone else's behalf, refused if a play landed after `seenSeq`. */
+    abandonLiveGame: (gameId, seenSeq) => live.abandonGame(gameId, seenSeq),
+
     /** Which games this device has confirmed are in the account. */
     syncedGames: () => readSyncedGames(),
 

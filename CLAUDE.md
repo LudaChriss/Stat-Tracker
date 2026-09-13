@@ -71,8 +71,20 @@ Write the script to a file and run the file.
 - Browser harnesses are run by hand, not by `npm test`: `browser-save-game.mjs`,
   `browser-backfill.mjs`, `browser-session.mjs`, `browser-parked.mjs`,
   `browser-invites.mjs`, `browser-two-phones.mjs`, `browser-leagues.mjs`,
-  `browser-team-switch.mjs`. Each needs a dev server on :5173 and Chrome on
-  `--remote-debugging-port=9222`.
+  `browser-team-switch.mjs`, `browser-abandon.mjs`, `browser-long-log.mjs`. Each
+  needs a dev server on :5173 and Chrome on `--remote-debugging-port=9222`.
+- New harnesses import `test/harness-browser.mjs` (preflight, accounts, phones,
+  tapping, the clock, the viewport audit) rather than carrying their own copy.
+  The older ones are left as they are because they pass.
+- `browser-abandon.mjs` moves the app's clock three hours forward rather than
+  waiting for the stale-game cutoff. The hook (`window.__scoreTrackerClock`)
+  exists only in the **dev** build, so this harness refuses to run against a
+  production preview.
+- **Going offline does not close an open WebSocket.** `Network.emulateNetworkConditions`
+  holds realtime messages and releases them when the signal returns, which is not
+  what a phone losing signal experiences. A harness that needs realtime genuinely
+  gone tracks the page's realtime sockets from document start and closes them
+  (see `browser-two-phones.mjs`' mismatch section and `browser-long-log.mjs`).
 - A harness that seeds localStorage must do it with
   `Page.addScriptToEvaluateOnNewDocument` and then remove the script, NOT by
   writing into an already-running app. The app writes its own blank starting
@@ -83,12 +95,12 @@ Write the script to a file and run the file.
   each open **private browser contexts** so their phones have genuinely separate
   localStorage and separate network conditions — two tabs on one origin share
   storage and would prove nothing. Each disposes its contexts on a normal
-  finish. **A run that exits early through `need()` does not**, and enough
-  orphans will start killing CDP sessions mid-test for reasons that have nothing
-  to do with the app. If a harness starts failing strangely, check
-  `curl -s localhost:9222/json | grep -c '"type": "page"'` — more than a couple
-  means orphans. Disposing every non-default browser context clears them, or
-  restart Chrome.
+  finish, and — since the phase 3 loose ends — on an early exit through
+  `need()` too. **A run that is killed** (Ctrl-C, a timeout, `pkill`) still
+  cannot, and enough orphans will start killing CDP sessions mid-test, or make
+  a harness fail its very first sign-in, for reasons that have nothing to do with
+  the app. Run `node test/dispose-contexts.mjs` to close every private context.
+  Counting pages under-reports: a context can be left with no page in it.
 - `session-expiry.mjs` and `browser-session.mjs` need genuinely short-lived
   tokens: set `jwt_expiry = 8` under `[auth]` in `supabase/config.toml` and
   restart the stack. **Put it back to 3600 afterwards** — an 8-second token

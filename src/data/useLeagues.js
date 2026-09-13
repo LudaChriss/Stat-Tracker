@@ -158,6 +158,40 @@ export function useLeagues(client, { getTeamId, getUserId } = {}) {
 
     removeTeam: (teamId) =>
       run(() => api.removeTeam(teamId), { after: reopen, notice: 'Team removed from the league' }),
+
+    /**
+     * Abandon a live game on the league screen, against the last play this
+     * screen read. Re-read afterwards whether it worked or not: if it was
+     * refused because a play arrived, the screen should show that play's game
+     * as in progress again rather than keep offering to abandon it.
+     */
+    abandon: async (gameId) => {
+      const detail = stateRef.current.detail;
+      if (!detail) return null;
+      const seen = ((detail.activity || {})[gameId] || {}).lastSeq || 0;
+      const result = await run(() => api.abandon(gameId, seen), {
+        after: reopen,
+        notice: 'Game abandoned · every play in it is kept',
+      });
+      if (result && result.error) await reopen();
+      return result;
+    },
+
+    /** Put a called-off fixture back on the calendar, as a new fixture. */
+    reschedule: (gameId, scheduledAt) =>
+      run(() => api.reschedule(gameId, { scheduledAt }), {
+        after: reopen,
+        notice: 'Back on the schedule',
+      }),
+
+    setVisibility: (visibility) => {
+      const detail = stateRef.current.detail;
+      if (!detail) return null;
+      return run(() => api.setVisibility(detail.league.id, visibility), {
+        after: reopen,
+        notice: visibility === 'private' ? 'Only members can see this league now' : 'Anyone can see this league now',
+      });
+    },
   };
 
   return { ...state, actions, isAvailable: api.isAvailable };

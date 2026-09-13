@@ -211,6 +211,42 @@ export default function LiveGame({ v, actions }) {
       }}
     >
       <Scoreboard v={v} actions={actions} />
+      {v.liveStopped && (
+        // The log has gone quiet past the cutoff. Said plainly, with the way
+        // out beside it — but not in the way: the next play entered makes the
+        // game fresh again and this goes away on its own.
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+            background: '#3A2A08',
+            borderBottom: `1px solid ${C.amberLine}`,
+            padding: '8px 16px',
+          }}
+        >
+          <span style={{ flex: '1 1 180px', fontSize: 12.5, fontWeight: 700, color: '#FFE3A3', minWidth: 0 }}>
+            No plays for {v.liveStopped.idle}. If this game is over, abandon it so nobody is offered it.
+          </span>
+          <button
+            onClick={actions.askAbandonGame}
+            style={{
+              background: 'none',
+              border: '1px solid #FFE3A3',
+              color: '#FFE3A3',
+              borderRadius: 99,
+              padding: '0 14px',
+              minHeight: 44,
+              fontSize: 12,
+              fontWeight: 800,
+              ...btn,
+            }}
+          >
+            Abandon game
+          </button>
+        </div>
+      )}
       <Tab v={v} actions={actions} />
 
       {/* Fielding position picker */}
@@ -329,6 +365,70 @@ export default function LiveGame({ v, actions }) {
               </div>
             </>
           )}
+        </Sheet>
+      )}
+
+      {/* Abandon confirmation. Worded apart from Discard on purpose: this
+          keeps every play and ends the game for every phone. */}
+      {v.confirmAbandon && v.liveStopped && (
+        <Sheet
+          onClose={actions.dismissAbandonGame}
+          sheetStyle={{ background: '#fff', color: C.ink, padding: '22px 20px 30px' }}
+        >
+          <div style={{ fontSize: 19, fontWeight: 800 }}>Abandon this game?</div>
+          <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 4 }}>
+            Nobody has entered a play for {v.liveStopped.idle}. Abandoning ends it on every phone.
+            Every play stays in the account, but it is not a result: it goes into no history, no
+            stats and no standings.
+          </div>
+          <div
+            style={{
+              background: '#FFF8E8',
+              border: `1.5px solid ${C.amberLine}`,
+              borderRadius: 13,
+              padding: '12px 14px',
+              marginTop: 14,
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 800, color: '#6B4E00', ...tnum }}>{v.cancelSummary}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#8A6100', marginTop: 2 }}>{v.cancelDetail}</div>
+          </div>
+          <button
+            onClick={actions.abandonThisGame}
+            disabled={v.liveStopped.busy}
+            style={{
+              width: '100%',
+              marginTop: 16,
+              background: '#B4441F',
+              border: 'none',
+              color: '#fff',
+              borderRadius: 14,
+              padding: 15,
+              minHeight: 48,
+              fontSize: 16,
+              fontWeight: 800,
+              ...btn,
+            }}
+          >
+            {v.liveStopped.busy ? 'Abandoning…' : 'Abandon the game'}
+          </button>
+          <button
+            onClick={actions.dismissAbandonGame}
+            style={{
+              width: '100%',
+              marginTop: 8,
+              background: 'none',
+              border: 'none',
+              color: C.muted,
+              padding: 10,
+              minHeight: 44,
+              fontSize: 14,
+              fontWeight: 700,
+              ...btn,
+            }}
+          >
+            Keep it going
+          </button>
         </Sheet>
       )}
 

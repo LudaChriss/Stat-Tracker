@@ -1,5 +1,5 @@
 import { C, FONT, btn, tnum } from '../theme.js';
-import { Avatar, Card, Section } from '../components/ui.jsx';
+import { Avatar, Card, Section, Sheet } from '../components/ui.jsx';
 
 const HEADER_GRID = '22px minmax(0, 1fr) 34px 34px 46px';
 
@@ -14,7 +14,10 @@ export default function LeagueHome({ v, actions }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <div>
+          {/* Allowed to shrink, and the name to wrap: a long one-word team name
+              otherwise pushes the two buttons off the right edge of a 375px
+              phone. Found by the viewport audit, run on a real signed-in team. */}
+          <div style={{ minWidth: 0, flex: '1 1 auto' }}>
             <div
               style={{
                 fontSize: 12,
@@ -26,7 +29,7 @@ export default function LeagueHome({ v, actions }) {
             >
               {v.leagueEyebrow}
             </div>
-            <div style={{ fontSize: 'clamp(19px, 5.6vw, 23px)', fontWeight: 800, letterSpacing: '-.01em' }}>
+            <div style={{ fontSize: 'clamp(19px, 5.6vw, 23px)', fontWeight: 800, letterSpacing: '-.01em', overflowWrap: 'anywhere' }}>
               {v.leagueTitle}
             </div>
           </div>
@@ -243,6 +246,105 @@ export default function LeagueHome({ v, actions }) {
           ))}
         </Card>
       </div>
+
+      {v.stoppedGame && <StoppedGameSheet v={v} actions={actions} />}
     </div>
+  );
+}
+
+/**
+ * A game still live in the account that nobody has scored for a while.
+ *
+ * Two ways out, and neither is the default. Abandoning ends it for everyone and
+ * keeps every play; resuming picks it up exactly where it stopped, for the rain
+ * delay that outlasted the cutoff. Abandoning is offered only to a manager or a
+ * scorer — the account refuses anyone else, and a button that only ever fails
+ * is worse than none.
+ */
+function StoppedGameSheet({ v, actions }) {
+  const g = v.stoppedGame;
+  const mayAbandon = ['team_manager', 'team_scorer'].includes(v.account && v.account.role);
+  const plays = g.plays == null ? null : g.plays;
+  return (
+    <Sheet
+      onClose={actions.closeStoppedGame}
+      sheetStyle={{ background: '#fff', color: C.ink, padding: '22px 20px 30px' }}
+    >
+      <div style={{ fontSize: 19, fontWeight: 800 }}>This game has stopped</div>
+      <div style={{ fontSize: 13, color: C.muted, fontWeight: 600, marginTop: 4, lineHeight: 1.45 }}>
+        It is still open in the account, but nobody has entered a play for {g.idle} — the last one
+        was {g.lastAt}.
+        {plays != null && ` ${plays} ${plays === 1 ? 'play was' : 'plays were'} entered before that.`}
+      </div>
+      {mayAbandon ? (
+        <>
+          <div style={{ fontSize: 12.5, color: C.muted, fontWeight: 600, marginTop: 10, lineHeight: 1.45 }}>
+            Abandoning ends it on every phone. Every play stays in the account, but it is not a result:
+            it goes into no history, no stats and no standings.
+          </div>
+          <button
+            onClick={actions.abandonStoppedGame}
+            disabled={g.busy}
+            style={{
+              width: '100%',
+              marginTop: 16,
+              background: '#B4441F',
+              border: 'none',
+              color: '#fff',
+              borderRadius: 14,
+              padding: 15,
+              minHeight: 48,
+              fontSize: 16,
+              fontWeight: 800,
+              ...btn,
+            }}
+          >
+            {g.busy ? 'Abandoning…' : 'Abandon it'}
+          </button>
+        </>
+      ) : (
+        <div style={{ fontSize: 12.5, color: C.muted, fontWeight: 600, marginTop: 10, lineHeight: 1.45 }}>
+          A manager or scorer on the team can abandon it.
+        </div>
+      )}
+      <button
+        onClick={() => {
+          actions.closeStoppedGame();
+          actions.joinLiveGame();
+        }}
+        style={{
+          width: '100%',
+          marginTop: 8,
+          background: '#fff',
+          border: `1.5px solid ${C.stroke}`,
+          color: C.ink,
+          borderRadius: 14,
+          padding: 13,
+          minHeight: 48,
+          fontSize: 15,
+          fontWeight: 800,
+          ...btn,
+        }}
+      >
+        Resume scoring it
+      </button>
+      <button
+        onClick={actions.closeStoppedGame}
+        style={{
+          width: '100%',
+          marginTop: 4,
+          background: 'none',
+          border: 'none',
+          color: C.muted,
+          padding: 10,
+          minHeight: 44,
+          fontSize: 14,
+          fontWeight: 700,
+          ...btn,
+        }}
+      >
+        Not now
+      </button>
+    </Sheet>
   );
 }

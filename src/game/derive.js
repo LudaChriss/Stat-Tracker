@@ -30,6 +30,8 @@ import {
   statLine,
 } from './logic.js';
 import { C } from '../theme.js';
+import { mergeLog } from './events.js';
+import { idleLabel, isStale, lastActivityAt, lastSeq } from './liveness.js';
 
 const TONES = {
   teal: { bg: C.teal, fg: '#fff', bd: 'none' },
@@ -163,9 +165,10 @@ function deriveStandings(s, actions) {
  * recent results. Nothing here is invented — there is no fixture list, so we
  * only show games that exist.
  */
-function deriveSchedule(s, actions) {
+function deriveSchedule(s, actions, now) {
   const cards = [];
   const opp = s.teams.length ? opponentTeam(s).name : null;
+  const stopped = !s.gameActive && s.joinable && isStale(s.joinable.lastActivityAt, now);
 
   if (s.gameActive) {
     cards.push({
@@ -175,6 +178,19 @@ function deriveSchedule(s, actions) {
       line: `${teamAbbrev(s.myTeam.name)} ${s.score.home} · ${teamAbbrev(opponentTeam(s).name)} ${s.score.away}`,
       sub: `${s.half === 'top' ? '▲ ' : '▼ '}${ordinal(s.inning)}`,
       onTap: actions.go('live'),
+    });
+  } else if (stopped) {
+    // A game still `live` in the account whose log has not moved for longer
+    // than the cutoff. Not offered as a game being scored right now, because it
+    // is not one: it is somebody else's unfinished business, and the card says
+    // so and leads to the choice — abandon it, or pick it back up.
+    cards.push({
+      key: 'stopped',
+      tag: '■ STOPPED',
+      tagColor: C.muted,
+      line: `${teamAbbrev(s.myTeam.name)} — no plays for ${idleLabel(now - s.joinable.lastActivityAt)}`,
+      sub: 'Tap to abandon or resume it',
+      onTap: actions.openStoppedGame,
     });
   } else if (s.joinable) {
     // Somebody else is scoring right now. Offered, never taken automatically:
@@ -302,7 +318,14 @@ function deriveScannedBook() {
   return cells;
 }
 
-export function deriveView(s, actions) {
+/**
+ * @param {object} s        app state
+ * @param {object} actions  from useGame
+ * @param {{now?: number}} [at]  the time to judge "how long since the last
+ *   play" against. Passed in rather than read, so a render is a pure function
+ *   of its inputs and a test can say what time it is.
+ */
+export function deriveView(s, actions, { now = Date.now() } = {}) {
   const tpl = TEMPLATES[s.sport];
   const dark = s.screen === 'live';
   const posOf = (p) => s.posOverride[p.id] || p.pos;
@@ -548,7 +571,21 @@ export function deriveView(s, actions) {
     toastMsg: s.toast,
 
     // ---- League ------------------------------------------------------------
-    schedule: deriveSchedule(s, actions),
+    schedule: deriveSchedule(s, actions, now),
+
+    // The sheet a stopped game's card opens. What happened, and the two ways
+    // out of it; abandoning is shown only to someone the account would let.
+    stoppedGame:
+      s.stoppedSheet && s.joinable && !s.gameActive
+        ? {
+            idle: idleLabel(now - s.joinable.lastActivityAt),
+            lastAt: new Date(s.joinable.lastActivityAt).toLocaleString('en-US', {
+              weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+            }),
+            plays: s.joinable.plays,
+            busy: !!s.abandoning,
+          }
+        : null,
     standings,
     leaders: s.roster.map((p) => ({ player: p, total: seasonTotals(s.history, homePid(p.id)) }))
       .filter(({ total }) => total.gp > 0)
@@ -746,6 +783,18 @@ export function deriveView(s, actions) {
       : s.liveConnected
         ? ' · SHARED'
         : ` · SHARED (${s.gameLog.filter((e) => !s.serverLog.some((x) => x.clientEventId === e.clientEventId)).length} UNSENT)`,
+    // A game this phone is in, whose log has gone quiet past the cutoff —
+    // counting this phone's own unsent plays as activity, so a scorer entering
+    // plays with no signal is never told their game has stopped. Only for a
+    // game in an account: a phone-only game has nobody else to abandon it for.
+    liveStopped: (() => {
+      if (!s.gameActive || !s.liveGameId) return null;
+      const log = mergeLog(s.serverLog, s.gameLog);
+      const at = lastActivityAt(log);
+      if (!isStale(at, now)) return null;
+      return { idle: idleLabel(now - at), seenSeq: lastSeq(s.serverLog), busy: !!s.abandoning };
+    })(),
+    confirmAbandon: !!s.confirmAbandon,
     finalLine: `${s.myTeam.name} ${s.score.home} — ${opponentTeam(s).name} ${s.score.away}`,
     finalHeading: s.inning >= 7 ? 'End of the 7th — finalize game?' : 'Finalize game?',
 

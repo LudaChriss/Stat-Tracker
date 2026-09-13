@@ -1,3 +1,428 @@
+# Report — phase 3 loose ends, and what phase 4 left open
+
+On branch **`phase-3-loose-ends`**, off `main` at `75d0249` (phase 4, merged
+locally and **not pushed** — `main` is 10 commits ahead of `origin/main`).
+Nothing pushed, and nothing written to the hosted project — it was read once,
+for its migration list (§5). **1398 assertions
+across 39 suites** (up from 1237 across 37), build clean, viewport audit
+clean across 68 screen×viewport combinations, and **all nine browser harnesses
+passing in one sequential run at the end** — the seven that existed, plus two new
+ones. `browser-session.mjs` was not run: it needs eight-second tokens and a stack
+restart (CLAUDE.md), and nothing it drives changed.
+
+**The headline: a game nobody finished stops being treated as a game being
+played, and anyone who could score it can end it.** After three hours without a
+play, the join offer turns into a STOPPED card, the league screen moves it from In
+progress to Stopped, and the game screen says so. A manager, scorer or
+commissioner abandons it from any of the three; every play stays in the account
+and none of it becomes a result. A commissioner puts a called-off fixture back on
+the calendar.
+
+**And three things worse than the one I was asked about, found by driving the
+new tests, all fixed:**
+
+- **A refused finalise took every phone out of a game that was still live** —
+  including the phone showing the sheet that said the game was still live and
+  nothing had been lost. That was a machine for making exactly the abandoned games
+  this session is about. D21.
+- **A phone that had joined a game and then reopened the app rolled the game back
+  for everyone** to whatever it last saved, and the box score written at the end
+  agreed with the rolled-back log, so nothing would have caught it.
+- **A phone that missed plays over realtime could stay behind for the rest of the
+  game**, holding the wrong score. The poll that exists to heal a dropped message
+  could not heal one that had a later message after it.
+
+**Read §5 and §6 before deploying.** One migration, additive: a column and two
+new functions. Nothing that exists is replaced; `save_game` and `schedule_game`
+are untouched.
+
+---
+
+## 1. What was asked, and what happened to each
+
+### 1. Abandoned live games — built, and verified in browsers
+
+**The cutoff** is three hours without an append, one constant
+(`STALE_AFTER_MS`, `src/game/liveness.js`). D20 argues it. It is applied in all
+three places a live game is shown: the join offer on the season screen, the
+league screen's lists, and the game screen itself.
+
+**Abandon** is the existing cancel tombstone plus a `cancel` event saying
+`abandoned` — not a new status, not a new event kind. D18 argues it. One new
+function does both halves under the per-game lock appends take, and refuses if a
+play arrived after the one the caller saw. Reachable from:
+
+- **the offer card** — a stopped game's card opens a sheet: what happened, how
+  many plays, *Abandon it* (manager or scorer only), *Resume scoring it*, *Not now*;
+- **the game screen** — a banner under the scoreboard once the log goes quiet, and
+  a confirmation worded apart from Discard;
+- **the league screen** — *Abandon this game* on a Stopped card for a commissioner
+  or a manager/scorer of either team, and *Call it off* on an in-progress fixture
+  nothing has been scored in, for a commissioner, without waiting for the cutoff.
+
+**Back on the schedule.** Neither of the two routes offered — `schedule_game`
+accepting a live game with an empty log, or abandon returning a fixture to
+`scheduled` — was taken, because both reuse the row, and a reused row accepts the
+unsent plays of a phone that walked away into the game that replaced it. The
+account cannot tell "no plays were entered" from "no plays arrived", so the empty
+log is no safer. Abandon always leaves the tombstone; a commissioner puts the
+fixture back **as a new fixture** from a Called off list only they see, and the
+old row records `replaced_by`. The same path serves a fixture with plays and one
+without. D19 argues it in full.
+
+**Kept out of history and standings, per team and league-wide**, by the tombstone
+every reader already filters — checked, not assumed: through `rowsToSeason` on
+rows read as each team's own manager, `leagueStandings` on rows read as a follower,
+both phones' seasons after a reload, and the league table on screen.
+
+**Verified:**
+
+- **`browser-abandon.mjs`** (169 checks, two phones, two accounts, one
+  league). The clock is moved three hours, never waited for.
+  1. A game somebody walked away from is offered as being scored, then — three
+     hours later on that phone's clock — as STOPPED; the sheet opens; B abandons
+     it; the account has the tombstone and every play, with the abandonment on the
+     end in B's manager's name; the offer disappears.
+  2. B opens a stopped game's sheet, a play goes into the account, B taps Abandon:
+     refused, **said on screen in words**, game still live, nothing added to the
+     log; back on the real clock it is offered as being scored again.
+  3. A scores a fixture from the league screen; B, on the other team, joins it; A
+     loses signal holding a play it never sent; B's game screen shows the stopped
+     banner three hours on; B abandons from inside the game. A comes back, is taken
+     out of the game, and **its unsent play is refused and shown as a change that
+     didn't save** — the thing D19 exists to protect — and it is not in the log.
+  4. The league screen: two live fixtures in progress; the commissioner is told
+     which has nothing scored and calls it off at once; three hours on, B sees the
+     other under Stopped with *Abandon this game* and no Called off list; A
+     abandons it; both are Called off; both are put back on the schedule on picked
+     dates, as new fixtures between the same teams, the old rows still tombstones
+     with their logs.
+  5. None of the five abandoned games is in either phone's history, and the league
+     table has no scored games in it.
+  6. The private toggle (§1.5).
+  Viewport audit at all four sizes on the stopped-game sheet, the game screen
+  banner and its confirmation, the league screen with Stopped and Called off, and
+  the league screen with the reschedule form open.
+- **`abandon-check.mjs`** (90, against the real database, as real signed-in
+  users): signed out, a stranger, a follower and another league's commissioner are
+  each refused; a stale `seenSeq` and a missing one are refused by name and change
+  nothing; the tombstone keeps every earlier event byte for byte; a retry succeeds
+  and adds nothing; a play afterwards and a `save_game` afterwards are both
+  refused; either team's manager and a scorer may abandon; a scheduled game, a
+  missing game and a final game cannot be. Rescheduling: signed out, a manager, a
+  scorer and another league's commissioner refused; a live game refused; a new
+  scheduled row between the same teams with its own id and no log; `replaced_by`
+  set; a retry returns the same fixture; **the replacement is scored while a play
+  from the abandoned game arrives, and that play is refused and does not reach the
+  replacement's log**; a team that has left the league and a friendly are refused.
+  **Checked against a deliberately broken function** (the seen-seq guard removed):
+  the suite fails — starting with the refusal, the game still being live and
+  nothing added to its log — so it can see what it claims to.
+
+  **And one fixture's whole life, counted.** A fixture is scored for four plays and
+  abandoned; a box-score line is attached to the tombstone anyway (the INSERT
+  policy on `game_lines` admits any scorer of a game, whatever its status); it is
+  put back on the schedule; the replacement is played and finalised. Read through
+  the league screen's own `createLeagues().detail()` as a follower, and through
+  `fetchSeason`'s own queries folded by `rowsToSeason` as each team's manager:
+  the replacement is played once, adds exactly one game, one win and one loss to
+  the league table and to each team's season standings, one game and its own two
+  hits to the player's season line — and the tombstone, and its four stray hits,
+  count nowhere. Then the same in absolute terms, against the final games and their
+  box scores as the service key reads them, because a difference cannot see a
+  tombstone counted the same way before and after. **Checked against two broken
+  folds**: letting `rowsToSeason` or `leagueStandings` count cancelled games each
+  fails the section.
+- **`liveness-check.mjs`** (54, pure): the cutoff at one hour, two and a half,
+  exactly three and a minute past; not knowing is never "stopped"; a phone's own
+  unsent plays count as activity; what the offer card, its sheet and the game
+  screen derive at a given time; the clock a harness moves.
+- **`league-buckets-check.mjs`** (30, was 24): Stopped against In progress with
+  activity and time, and without them; Called off until replaced.
+
+### 2. The mismatch sheet — driven for real, audited, and it was lying
+
+It had never been on a screen, because it appears only when a phone's box score
+disagrees with the account's log. **`browser-two-phones.mjs`** now makes that
+happen honestly, in the middle of its existing game: A's realtime socket is
+closed and refused, and its incremental poll refused, while the whole-log read
+finalising makes is left alone; B scores a play A never hears about; A calls the
+game. The sheet appears, names the difference in terms of the plays, the account
+still says live — and the viewport audit runs on it at all four sizes. Clean.
+
+Then the harness waits, and that is where D21 was found: within seconds of A
+hearing from the account again, **both phones left the game**. Now pinned: after
+the refusal and fourteen seconds of both phones polling, A and B are still in the
+game, agree on the score including B's play, and the account says live — and the
+existing section that follows finalises it properly.
+
+Getting there needed one harness fact worth knowing (now in CLAUDE.md): **going
+offline does not close an open WebSocket** — Chrome holds realtime messages and
+releases them when the signal comes back. The first attempt at this section
+finalised cleanly because A had heard B's play all along.
+
+### 3. Long logs — timed, not paginated
+
+**`browser-long-log.mjs`**: a game of 353 events (a start, a play from
+the screen, 320 plays appended as the manager through `append_game_event`, then a
+further 11 for the gap test), joined by a second phone, that phone losing signal
+while 20 more go in, and that phone reloaded mid-game. Every read of the log that
+phone made is recorded from the network. Laptop, local stack: a floor, not a phone
+on a field.
+
+| | run 1 | run 2 | run 3 | final run |
+|---|---|---|---|---|
+| **Join**, tap → holding every event on the live screen | 971 ms | 645 ms | 734 ms | 562 ms |
+| — the one whole-log read | 322 rows · 116 KB · 393 ms | 333 rows · 119 KB · 248 ms | 333 rows · 119 KB · 351 ms | 333 rows · 119 KB · 203 ms |
+| **Fold** of the whole log in the page (median of 5) | 144 ms | 104 ms | 100 ms | 104 ms |
+| **Signal back**, 20 missed plays → caught up | 1834 ms | 2430 ms | 2120 ms | 1695 ms |
+| — reads | since seq, 20 rows · 7.7 KB | since seq, 20 rows | since seq, 20 rows | since seq, 20 rows · 7.7 KB |
+| **Reload** → live screen holding every event | 2057 ms | 1682 ms | 1885 ms | 1553 ms |
+| — reads | since seq, 0 rows | since seq, 0 rows | since seq, 0 rows | since seq, 0 rows |
+
+Run 1 predates the gap test, hence 322 events rather than 333.
+
+**What this says.** Only joining reads a whole log, once: about 360 bytes a play,
+so a 300-play game is a bit over 100 KB, and folding it takes about a tenth of a
+second. A dropped signal and a cold reopen both read **only what is new** — the
+phase 3 note that a long log is fetched whole "on the first catch-up after a
+reconnect" was not right for either; the device keeps what it has. At the
+100–150 plays a rec game actually produces, a join is a ~40 KB read. Pagination is
+not worth its complexity; this is the measurement to revisit if a phone on a slow
+network ever feels it.
+
+**And the harness found two of the three bugs above.** Its first real run had
+phone A — which was *in* the game while the 320 plays went in — stuck at 264 of
+322 with the wrong score, for good (the catch-up gap). And the reads after the
+reload were one row longer than the log had been: a `resume` appended by the
+reopening phone (the rollback). Both are now pinned in this harness: a hole of ten
+plays made on purpose — realtime cut, ten plays, realtime back, one play — is
+filled within one poll once the poll is allowed (run against the old catch-up
+code, it stayed unfilled for thirty seconds and failed); and reopening the phone
+appends nothing.
+
+### 4. The four phase 4 harnesses that were not re-run — run first
+
+Before a line of this session's code: `browser-save-game` 56, `browser-backfill`
+52, `browser-parked` 36, `browser-invites` 63 — all passing, no browser contexts
+left behind. And again at the end, with everything else, in §1's final run:
+`browser-save-game` 56, `browser-backfill` 52, `browser-parked` 36, `browser-invites` 63, `browser-two-phones` 113, `browser-leagues` 135, `browser-team-switch` 34, `browser-abandon` 169, `browser-long-log` 35 — 693 checks, every console silent, no browser context left behind.
+
+### 5. The rest of both unfinished lists
+
+**Closed:**
+
+- **Harness hygiene** (phase 4). `need()` in the three context-opening harnesses
+  now throws, and a handler closes every context the run opened before exiting 2.
+  New harnesses get the same from `test/harness-browser.mjs`. And
+  `node test/dispose-contexts.mjs` closes what a *killed* run leaves — this session
+  found ten, several with no page in them, which the "count the pages" advice in
+  CLAUDE.md could not see. One of them was why `browser-two-phones` failed its very
+  first sign-in this session.
+- **No UI for making a league private** (phase 4). A commissioner's *Make this
+  league private* / *public*, with a line saying what each means. Row-level
+  security already enforced it. Verified in `browser-abandon.mjs`: the column
+  flips, a signed-out client stops and starts being able to read the league, and a
+  manager who is not the commissioner has no such control.
+- **The abandoned-fixture regression** from the phase 4 report — every part of it,
+  above.
+
+**Already resolved by phase 4, so skipped:**
+
+- **"The join offer only looks at the primary team"** (phase 3). Since 4b the
+  repository is bound to the team the phone is looking at, so the offer follows the
+  team switcher. A game on another of your teams is offered when you switch to that
+  team, not while you are looking at a different one.
+
+**Not closed, and why:**
+
+- **A live spectator view**, **routing**, **realtime on the league screen** — phase
+  5 (5a–5c). Untouched.
+- **The event log is never pruned** (phase 3) — a note to watch, not a defect, and
+  every abandoned game now relies on its log being kept.
+- **A league game scored from the season screen is a friendly**, and **a fixture
+  on the season screen's next-game card** (phase 4) — a product change, not a
+  loose end.
+- **Seeing or revoking outstanding league codes** (phase 4) — the same gap team
+  invites have, and closing one without the other would be odd. Not cheap.
+- **A commissioner removing another team**, and **a league admin's controls on a
+  member team** (phase 4) — both deliberate, and both need a conversation first.
+- **Leaders show five players and four stats** (phase 4) — a limit, not a defect;
+  nothing here needed it.
+- **Nothing reconciles sports across a league** (phase 4) — needs a decision about
+  what should happen, not code.
+- **Opposing teams in the season view carry no `priorT`** (phase 4) — a data
+  mapping with a round-trip test built around its current shape; not cheap to do
+  properly.
+
+---
+
+## 2. Judgement calls
+
+D18–D21 are the four that change the model. Beside them:
+
+**A stopped game can still be resumed.** "Stop treating it as live" is about what
+it is offered as. A rain delay that outlasts three hours is exactly when someone
+wants to pick the game back up, and the game is still open in the account; the
+sheet offers both.
+
+**A stopped game's card is shown to a follower too; abandoning is not.** The card
+is information — something is sitting open on the team's account — and the sheet
+says a manager or scorer can abandon it. The account would refuse a follower.
+
+**Stopped is shown to everyone on the league screen; Called off only to a
+commissioner.** A stopped fixture is a real state of the league. A called-off one
+is the commissioner's to-do list; to everyone else a cancelled game is in none of
+the lists, as it was.
+
+**Abandoning is not queued**, unlike cancelling. A cancel is the scorer's own
+decision about their own game and belongs in order with their plays; an abandon is
+a decision about a game the phone is looking at now, against what it saw.
+
+**The clock hook exists only in the development build.** A production build has no
+way to move it.
+
+**The seen-seq guard is the protection, not the cutoff.** The database does not
+know about three hours, and does not need to: anybody who may abandon a game could
+already cancel it, and what makes abandoning safe is refusing when a play landed
+since the phone looked. That keeps the cutoff a single constant.
+
+**A scorer can still write `replaced_by` directly.** `games_update_scorer` has
+always let a scorer of either team write any column of a game directly, status and
+score included. `replaced_by` is one more; a scorer could hide a called-off fixture
+from the commissioner's list. Pinned by a test so it is known rather than
+discovered. Narrowing that policy is its own piece of work.
+
+---
+
+## 3. Found on the way, and fixed
+
+**A refused finalise ended the game on every phone** (D21). Described above; the
+sheet was the witness. The fold no longer ends a game on a `final` event; a phone
+holding one asks the account for the row and leaves when it is final. Pinned in
+`events-check.mjs` and in `browser-two-phones.mjs`, which failed on exactly this
+before the fix.
+
+**Reopening a phone that had joined a game rolled the game back for everyone.**
+The effect that opens a log for a game with none — scored signed out, or before
+logs existed — tested only "this phone has entered nothing", which is also true of
+every phone that joined and has only watched. Reopening one appended a `resume`
+carrying its last saved snapshot on the end of the shared log, and the fold replaced
+the game with it. A phone that reopened behind would have rolled the score back on
+every phone, and the box score at the end would have matched the rolled-back log.
+Now a game that already has an account log never gets a `resume`, and the fold
+ignores one that is not the opening event, so a log that already contains one is
+harmless. Pinned in `events-check.mjs` (a snapshot two plays old, folded whole and
+incrementally) and `browser-long-log.mjs` (reopening appends nothing).
+
+**The catch-up poll could not fill a hole.** It asked for plays newer than the
+highest held, so a phone that realtime gave 270 after dropping 201–269 asked for
+"after 270" for the rest of the game. It now asks from the end of the unbroken run
+(`contiguousSeq`); the account numbers a game's events without gaps, checked across
+the forty most recent games in the local database. Pinned both ways, and the
+browser pin was run against the old code first to be sure it fails.
+
+**The season screen's header could not shrink.** A long one-word team name pushed
+*Leagues* and *Manage* 3px off a 375px screen. Found by the viewport audit on a real
+signed-in team with a long name; nothing it had measured before had one.
+
+**The viewport audit gained two restorable states**, the STOPPED card and the game
+screen's banner. The sheets they open are reset on reload by design, so they are
+audited in `browser-abandon.mjs` instead — verified by reading the page, because the
+audit's screenshot option hangs on this Chrome and produced nothing.
+
+---
+
+## 4. Unfinished, and what to watch
+
+- **`browser-session.mjs` was not run** (short tokens, stack restart).
+- **The first end-of-session regression run did not finish cleanly, and it was
+  not the code.** `browser-two-phones` failed its first sign-in, `browser-leagues`
+  lost its DevTools session mid-run ("Session with given id not found"), and
+  `browser-team-switch` sat silent for twelve minutes before opening a phone.
+  The test Chrome had been through a long session of harnesses, probes and one
+  screenshot attempt that hung; it was restarted with the same profile and flags,
+  and all nine harnesses then passed in one sequential run. Worth knowing that the
+  symptom of a tired test browser looks exactly like a broken sign-in.
+- **Phones on an older build keep all three bugs** until they update. Worth
+  knowing about one in particular: an old build that reopens after joining will
+  still append a `resume`. New builds ignore it; old builds fold it. Two phones on
+  different builds can then disagree about the same game until the old one updates.
+  None of phase 3 is deployed yet, so this matters only if an old build of phase 3
+  is ever live alongside a new one.
+- **"Stopped" is judged on the phone's clock** against the account's timestamps.
+  Network time keeps phones well inside the three hours; a phone with its clock set
+  by hand to the wrong day would see every game as stopped, and could offer to
+  abandon one — which the account would still refuse if a play had arrived.
+- **Nobody is told a fixture was called off** except the commissioner, on the
+  league screen. The teams find out when it is not on the schedule.
+- **Abandoning needs signal.** By design (§2).
+- **A called-off league game that is not a fixture** — there are none today, since
+  a game between two league teams only happens through a fixture — would show in the
+  commissioner's list like any other.
+
+---
+
+## 5. Migrations pending on the hosted project — verified, eight
+
+**Read from the hosted project itself** (`npx supabase migration list --linked`,
+read-only, 2026-09-12): `_000`–`_015` are applied; **`_016`–`_023` are not.**
+That corrects the phase 3 and phase 4 reports, which still say `_014` and `_015`
+are pending — they were pushed at some point after those were written.
+
+What production is running could not be verified: the repo is not linked to a
+Vercel project. `origin/main` is `6bb089f`, phase 3's code, whose live scoring
+calls functions only `_016` creates. "Safe while live" below is judged against
+that app and against the pre-phase-3 app, in case production is further behind.
+
+| # | Migration | What it does | Safe while the current app is live? |
+|---|---|---|---|
+| 1 | `20260101000016_live_event_log` | Nullable `game_events.client_event_id` + unique index; new `start_live_game`, `append_game_event` | **Yes.** Additive. The index is over a column that is null everywhere, so it cannot fail on existing rows. If production is phase 3's code, this is what its live scoring has been missing |
+| 2 | `20260101000017_realtime_game_events` | `game_events` into the realtime publication (guarded if absent); index on `games(status)` | **Yes.** Grants nothing; realtime applies the table's own read policy |
+| 3 | `20260101000018_finish_a_shared_game` | New `cancel_live_game`; **replaces `save_game`**, same signature | **Yes.** A game with no event log — every game the pre-phase-3 app writes — takes the identical path |
+| 4 | `20260101000019_leagues` | League invites, `join_league`, `schedule_game`, two guard triggers on `teams`; **drops and recreates `peek_invite`** at the same signature | **Yes, with one thing to know.** The recreate happens inside the migration's transaction, so a caller waits rather than fails. The triggers refuse only a signed-in caller moving a team *into* a league they are not a member of; the current app never sets `teams.league_id` |
+| 5 | `20260101000020_shared_lineup` | `players.lineup_order`, `players.on_bench`; **replaces `save_season`**, same signature | **Yes.** A payload with no `lineup` key — every payload the current app sends — leaves the order alone |
+| 6 | `20260101000021_games_know_their_league` | New `shared_league`; **replaces `save_game`, `start_live_game`** | **Yes.** Only sets `league_id` when both teams share a league; no data is backfilled |
+| 7 | `20260101000022_score_a_fixture` | New `can_name_opponent`; **replaces `save_game`, `start_live_game`** again | **Yes.** A payload without `opponentTeamId` takes the path it took before |
+| 8 | `20260101000023_abandon_a_stale_game` | Nullable `games.replaced_by`; new `abandon_live_game`, `reschedule_called_off_game`, signed-in only | **Yes.** Additive; nothing existing is replaced |
+
+**Run them in that order, all of them, before this branch's code.** `_021` and
+`_022` each replace `save_game` and `start_live_game`; the last one applied is
+the one that stands. `npx supabase db push` applies exactly these eight in order.
+
+After pushing, the overload check — **one row each**:
+
+```sql
+select proname, pg_get_function_arguments(oid) from pg_proc
+  where proname in ('abandon_live_game', 'reschedule_called_off_game', 'cancel_live_game',
+                    'save_season', 'save_game', 'peek_invite', 'start_live_game',
+                    'append_game_event');
+```
+
+---
+
+## 6. Deploy order
+
+**Migrations first**, for the same reason as phase 4: that side fails safely.
+
+- **`_023` without the new code: nothing changes.** Nothing calls the functions
+  and nothing reads the column.
+- **The new code without `_023`:** abandoning and rescheduling fail on screen with
+  the account's words; stopped games are still shown as stopped. Nothing is queued,
+  so nothing is left retrying.
+
+1. **Export the season from the phone first.**
+2. **`npx supabase db push`** — the eight in §5, `_016` to `_023`, in order.
+3. **The overload check above.**
+4. **Then push the code.** `main` holds phase 4 locally and is unpushed; this work
+   is on `phase-3-loose-ends` on top of it.
+5. **First thing to try:** on a phone in a game, nothing changes until three hours
+   pass — so instead, as a commissioner, start scoring a fixture and use *Call it
+   off* on the league screen, then *Put back on the schedule*. If *Call it off* says
+   the function does not exist, `_023` did not apply.
+
+---
+
 # Report — phase 4, multi-team and multi-league (4a, 4b, 4c, 4d)
 
 All four slices built and green, plus **4e** — the wire between a fixture and a
@@ -346,6 +771,8 @@ on the next line.
 ---
 
 ## 4. Unfinished, and what to watch
+
+_Every item below is answered, one by one — closed, already resolved, or left and why — in **Report — phase 3 loose ends** at the top of this file._
 
 **What is left of it.** 4e connects a league FIXTURE to the scoring flow, which
 is the path that matters: a commissioner schedules, somebody taps "Score this
@@ -698,6 +1125,8 @@ into one, and the two-phone harness checks the team count after sign-in.
 ---
 
 ## 4. Unfinished, and what to watch
+
+_Every item below is answered, one by one — closed, already resolved, or left and why — in **Report — phase 3 loose ends** at the top of this file._
 
 - **A `live` row is never cleaned up.** A game abandoned without being finalised
   or cancelled — phone flat, app closed, walked away — stays `live` in the
@@ -1370,6 +1799,7 @@ user's, which is what they were.
 | 3b | Realtime subscription; two phones on one game stay in sync | **green** |
 | 3c | Concurrency: chosen strategy documented and tested | **green** (D13) |
 | 3d | Cancel / undo / finalize correct in the shared model | **green** |
+| — | **Loose ends: a stopped game is not offered as live; abandon; called-off fixtures back on the schedule** | **green** (D18–D21) |
 | — | **Pulled forward: a finalized game is written to the backend** | **green** |
 | — | **Pulled forward: past games can be sent to the backend on demand** | **green** |
 
@@ -1807,6 +2237,127 @@ season screen is at home, which is what the record was hard-coded to. A fixture
 says which side we are on, and the record carries it — getting that the wrong
 way round hands the win to the wrong team, and it is the kind of wrong nobody
 notices until the table is read. There is a test for the away case alone.
+
+### D18 — Abandoning a game is the cancel tombstone, and the log says so
+
+A live game nobody finished needs a way to end that is not "score it to the end"
+and not "the scorer who walked away taps Cancel". Three shapes were possible.
+
+- **A new status** (`abandoned`). Every reader that keeps a game out of a
+  season, a history, a league table and the league screen's lists filters on
+  status today, and each has tests saying `cancelled` stays out. A new status has
+  to be taught to all of them, and the one that is missed counts an abandoned
+  game as a result — silently. It would also mean changing the `games.status`
+  check constraint, which is not an additive migration.
+- **A new event kind** (`abandon`). The fold ignores kinds it does not know, so a
+  phone on an older build replaying a log that ends in `abandon` would think the
+  game is still live, keep offering it, and keep appending plays the account
+  refuses.
+- **The existing tombstone, with the reason in the log.** Chosen. Status
+  `cancelled`, the row and its whole log kept — exactly what `cancel_live_game`
+  already writes, so every existing reader already does the right thing. The log
+  gets a `cancel` event whose payload says `{ reason: 'abandoned', seenSeq }`, so
+  the record shows who ended it, that it was ended for having stopped, and what
+  they had seen; and an older build folds it as a cancel, which is correct.
+
+**One function does both halves** (`abandon_live_game`), in one transaction,
+under the same per-game advisory lock every append takes. And it takes the
+sequence number the caller last saw, and **refuses if the log has moved past
+it**. "Stopped" is judged on a phone from a list that can be seconds old; a rain
+delay that ends in those seconds must not be abandoned out from under the scorer.
+The account names the refusal and the phone says it in words.
+
+**Who.** Whoever `can_score_game` admits — a manager or scorer of either team, or
+a commissioner of the league. Not a follower. Anybody who may score a game could
+already cancel it; this is not a wider door.
+
+**Not queued.** Plays go through the offline queue because they happened. An
+abandon is a decision about what this phone is looking at now; if it cannot
+reach the account the person is told and nothing changes.
+
+### D19 — A called-off fixture goes back on the schedule as a new fixture
+
+A league fixture somebody started and nobody finished has to be able to return
+to the calendar, with plays in it or without. The two obvious routes both reuse
+the row — `schedule_game` accepting a live game with an empty log, or abandon
+setting the status back to `scheduled` — and **both are refused, for the same
+reason**.
+
+A row goes live when the scoring phone's first append reaches the account. The
+plays after that can still be on that phone, unsent, when the phone loses signal —
+which at a field is the ordinary case, not the edge. While the row is a
+tombstone, those plays are refused when they finally arrive, and park visibly
+(verified in a browser: the phone that walked away shows "1 change didn't save").
+Put the same row back on the schedule and score it again, and the account
+**accepts** them — into a different game, in the middle of it, with nothing on any
+screen to say so. And the account cannot tell "no plays were entered" from "no
+plays arrived", so an empty log is no safer than a full one.
+
+So: abandon always leaves the tombstone, and **a commissioner puts the fixture
+back as a new row** (`reschedule_called_off_game`) — same league, same two teams,
+a new date, a new client id. The old row keeps its log and records `replaced_by`,
+which is how the league screen knows it has been dealt with. It is idempotent: a
+retry lands on the fixture the first call made. `schedule_game` is untouched.
+
+**The no-plays case is still immediate.** A commissioner sees "Nothing has been
+scored in it yet — Call it off" on a live fixture with no plays, without waiting
+for the cutoff, so a fixture started by mistake or rained out before the first
+pitch is back on the calendar in two taps. The account still refuses if a play
+lands first.
+
+**Where called-off fixtures show.** In a list only a commissioner sees, until
+they are put back. Everyone else's lists stay as they were: a cancelled game is in
+none of Schedule, In progress, Stopped or Played.
+
+### D20 — A live game is stopped after three hours without an append
+
+A `live` row is a promise that somebody is scoring. The log is the evidence: each
+play is an append with the account's timestamp on it. A game whose log has not
+moved for longer than `STALE_AFTER_MS` is treated as stopped — **three hours**,
+one constant in `src/game/liveness.js`, read everywhere the question is asked.
+
+- **A rec game is an hour to an hour and a half.** Between plays it is minutes;
+  the longest ordinary gap is a half-inning of the opposition when only our side
+  is tracked.
+- **The longest legitimate silence is weather.** A lightning hold restarts its
+  thirty minutes with every strike, so an hour's stop is common and two hours
+  happens. Past two, a rec league's field booking is over and the game is called.
+  Three hours clears everything that is still genuinely going.
+- **And it is short enough to matter.** A game abandoned at seven in the evening
+  is out of every phone's way by the time anybody looks the next morning.
+
+**Being wrong is cheap in both directions**, which is what makes a cutoff safe.
+Nothing is changed by a game becoming stopped: it is still live in the account,
+it can be resumed from the same card, and the next play makes it fresh again. The
+only thing a stopped game unlocks is the option to abandon it — and abandoning
+refuses if a play has arrived since (D18).
+
+**Judged on the phone, against the account's timestamps.** A phone's clock is
+kept by the network to well under a second; the cutoff is hours. The phone's own
+unsent plays count as activity, so a scorer entering plays with no signal is never
+told their game has stopped. The clock is injectable (`src/game/clock.js`) so a
+browser can be moved three hours forward rather than wait for them; the hook
+exists only in the development build.
+
+### D21 — A call is a claim: a phone leaves a game when the account says it ended
+
+Finalising a shared game appends the event that CALLS it, then reads the log back
+and compares its box score with a replay (3d). Appending first is right — it is
+what makes the comparison sound, and what lets `save_game` refuse a box score the
+log moved on from. But the fold treated that event as the end of the game, so
+**every phone that received it left the game** — including the one whose box
+score was refused, which was at that moment showing a sheet saying the game was
+still live and nothing had been lost. The account still had it open, and nobody
+was in it: the stale live game D18–D20 exist to clean up, manufactured by the
+screen that promised it had not happened. Found by driving the mismatch sheet in
+a browser for the first time.
+
+**The rule now.** A `final` event marks the game as called, and leaves it active
+in the fold. A phone holding a call asks the account for the game's row on the
+same interval as the live poll, and leaves when the row is `final` or `cancelled`.
+A play after a call means the call did not stand, and the game is live again in
+the fold and in `logStatus`. A cancellation still ends a game on sight: the
+account accepts nothing after one.
 
 ### D3 — League visibility is a column, not an assumption
 

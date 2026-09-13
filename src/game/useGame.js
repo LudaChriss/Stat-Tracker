@@ -8,6 +8,7 @@ import { requestPersistence } from './storage.js';
 import { buildGameRecord, applyMoveLineup, opponentTeam } from './logic.js';
 import { createReplayer, liveSlice, logStatus, mergeLog, replay, undoTarget } from './events.js';
 import { reconcileBoxScore } from './reconcile.js';
+import { contiguousSeq } from './liveness.js';
 
 const TOAST_MS = 2600;
 const SYNC_MS = 3200;
@@ -27,6 +28,91 @@ const JOINABLE_POLL_MS = 15000;
 // the whole point of the abstraction, and why nothing below this line had to
 // change to do it.
 const defaultRepository = createLocalRepository();
+
+/**
+ * This phone, no longer in a game: the live state back to nothing, the log let
+ * go, the season untouched. Shared by cancelling a game and abandoning one.
+ */
+function withoutGame(cur, screen) {
+  return {
+    ...cur,
+    screen,
+    gameActive: false,
+    gameFinal: false,
+    liveTab: 'entry',
+    half: 'top',
+    inning: 1,
+    outs: 0,
+    bases: [null, null, null],
+    score: { home: 0, away: 0 },
+    kiHome: 0,
+    kiAway: 0,
+    gameStats: {},
+    events: [],
+    undoStack: [],
+    tape: [],
+    lastPlay: null,
+    bookOff: null,
+    selRunner: null,
+    posMenu: null,
+    confirmFinal: false,
+    confirmCancelGame: false,
+    confirmAbandon: false,
+    callPending: false,
+    gameClientId: null,
+    gameStartedAt: null,
+    gameOpponentTeamId: null,
+    gameHome: true,
+    gameFixture: null,
+    gameLog: [],
+    serverLog: [],
+    liveGameId: null,
+    liveConnected: false,
+    finalPrompted: false,
+    liveMismatch: null,
+  };
+}
+
+/**
+ * A shared game this phone was in has ended somewhere else — `how` is final,
+ * cancelled or abandoned. The live state goes, the reason is kept for the toast,
+ * and a phone looking at the live screen is taken off it.
+ */
+function leftSharedGame(s, how) {
+  return {
+    gameActive: false,
+    liveEnded: how,
+    callPending: false,
+    confirmAbandon: false,
+    screen: s.screen === 'live' ? 'league' : s.screen,
+    liveTab: 'entry',
+    confirmFinal: false,
+    confirmCancelGame: false,
+    selRunner: null,
+    gameLog: [],
+    serverLog: [],
+    gameClientId: null,
+    gameStartedAt: null,
+    gameOpponentTeamId: null,
+    gameHome: true,
+    gameFixture: null,
+    liveGameId: null,
+    liveConnected: false,
+    finalPrompted: false,
+  };
+}
+
+/** Why an abandon did not happen, in words for a person. */
+export function abandonFailure(err) {
+  const raw = String((err && err.message) || err || '');
+  if (/since you looked/i.test(raw)) {
+    return 'Someone has just entered a play in that game, so it was not abandoned.';
+  }
+  if (/already been finalised/i.test(raw)) return 'That game has already been finalized.';
+  if (/not allowed to score/i.test(raw)) return 'Only a manager, scorer or commissioner can abandon a game.';
+  if (/network|fetch|offline/i.test(raw)) return 'Could not reach the account, so the game was not abandoned.';
+  return `The game was not abandoned: ${raw}`;
+}
 
 /**
  * Owns the whole app state. Every action is expressed as a state -> state
@@ -172,26 +258,18 @@ export function useGame(injectedRepository) {
       out.finalPrompted = true;
     }
 
-    // The game ended somewhere else. The log says so — a cancel or a final
-    // event from the other phone — and this phone has to stop being in it,
-    // rather than sitting on a live screen for a game that is over.
-    if (s.gameActive && (derived.cancelled || derived.finalized)) {
-      out.liveEnded = derived.cancelled ? 'cancelled' : 'final';
-      out.screen = s.screen === 'live' ? 'league' : s.screen;
-      out.liveTab = 'entry';
-      out.confirmFinal = false;
-      out.confirmCancelGame = false;
-      out.selRunner = null;
-      out.gameLog = [];
-      out.serverLog = [];
-      out.gameClientId = null;
-      out.gameStartedAt = null;
-      out.gameOpponentTeamId = null;
-      out.gameHome = true;
-      out.gameFixture = null;
-      out.liveGameId = null;
-      out.liveConnected = false;
-      out.finalPrompted = false;
+    // Cancelled or abandoned somewhere else. A cancellation is the end in every
+    // sense — the account accepts nothing after it — so the log saying so is
+    // enough, and this phone stops being in the game rather than sitting on a
+    // live screen for a game that is over.
+    if (s.gameActive && derived.cancelled) {
+      Object.assign(out, leftSharedGame(s, derived.abandoned ? 'abandoned' : 'cancelled'));
+    } else {
+      // A CALL is different. The event that calls a game is appended before the
+      // box score is checked against the log, and a call whose box score is
+      // refused leaves the game live. So a call only makes this phone watch the
+      // account's row; the effect below leaves the game when that row is final.
+      out.callPending = !!derived.finalized;
     }
     return out;
   }, []);
@@ -283,6 +361,14 @@ export function useGame(injectedRepository) {
     if (!hydrated) return;
     const s = stateRef.current;
     if (!s.gameActive || (s.gameLog && s.gameLog.length)) return;
+    // A game the account already holds a log for is not a game with no log,
+    // even if THIS phone entered nothing in it — which is exactly a phone that
+    // joined and has only watched. Reopening such a phone used to append a
+    // resume carrying its last saved snapshot on the end of the shared log, and
+    // every phone folded the game back to that snapshot: a phone that reopened
+    // behind would roll the game back for everyone, and the box score written at
+    // the end would agree with the rolled-back log.
+    if ((s.serverLog && s.serverLog.length) || s.liveGameId) return;
 
     const startedAt = s.gameStartedAt || Date.now();
     const clientId = s.gameClientId || `g-${startedAt}`;
@@ -368,7 +454,10 @@ export function useGame(injectedRepository) {
 
     let stopped = false;
     const catchUp = async () => {
-      const since = stateRef.current.serverLog.reduce((m, e) => Math.max(m, e.seq || 0), 0);
+      // From the end of the unbroken run, not the highest seq held: a play
+      // realtime dropped leaves a hole below the highest, and asking only for
+      // what is newer than that would never fill it.
+      const since = contiguousSeq(stateRef.current.serverLog);
       try {
         const events = await repository.fetchEvents(gameId, since);
         if (!stopped && events.length) acceptServerEvents(events);
@@ -402,6 +491,40 @@ export function useGame(injectedRepository) {
   }, [state.liveGameId, state.gameActive, repository, acceptServerEvents, patch]);
 
   /**
+   * Somebody has called the game. Did it end?
+   *
+   * The account's row is the only thing that knows. The phone that called it
+   * may still be writing the box score, which takes a moment; or its box score
+   * may have been refused, in which case the game is live and everybody should
+   * still be in it — including that phone, which has just been told so on
+   * screen. Asked on the same interval as the live poll, and only while a call
+   * is the last word in the log.
+   */
+  useEffect(() => {
+    const gameId = state.liveGameId;
+    if (!gameId || !state.gameActive || !state.callPending || !repository.gameStatus) return undefined;
+
+    let stopped = false;
+    const check = async () => {
+      let status;
+      try {
+        status = await repository.gameStatus(gameId);
+      } catch {
+        return;
+      }
+      if (stopped || (status !== 'final' && status !== 'cancelled')) return;
+      setState((s) => (s.gameActive && s.liveGameId === gameId ? { ...s, ...leftSharedGame(s, status) } : s));
+    };
+
+    check();
+    const timer = setInterval(check, LIVE_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [state.liveGameId, state.gameActive, state.callPending, repository]);
+
+  /**
    * The game ended on the other phone.
    *
    * Say so — a screen that simply empties is indistinguishable from the app
@@ -414,9 +537,11 @@ export function useGame(injectedRepository) {
     const how = state.liveEnded;
     patch({ liveEnded: null });
     toast(
-      how === 'cancelled'
-        ? 'That game was cancelled on another phone'
-        : 'That game was finalized on another phone',
+      how === 'abandoned'
+        ? 'That game was abandoned after it stopped being scored. Every play in it is kept.'
+        : how === 'cancelled'
+          ? 'That game was cancelled on another phone'
+          : 'That game was finalized on another phone',
       3600,
     );
     if (how !== 'final') return;
@@ -573,7 +698,16 @@ export function useGame(injectedRepository) {
         // date — long enough for the game to have been finished or thrown away
         // on the other phone. Joining it then would drop someone into a game
         // that is already over.
-        const status = logStatus(events);
+        let status = logStatus(events);
+        // A call as the last word in the log is only a claim. Ask the account
+        // whether it stood before refusing to join a game it still has open.
+        if (status === 'final' && repository.gameStatus) {
+          try {
+            if ((await repository.gameStatus(found.gameId)) === 'live') status = 'live';
+          } catch {
+            /* unreachable: refuse, as before */
+          }
+        }
         if (status !== 'live') {
           patch({ joinable: null });
           toast(status === 'cancelled' ? 'That game was cancelled' : 'That game has finished', 3000);
@@ -795,41 +929,63 @@ export function useGame(injectedRepository) {
           // what guarantees that — not a timer.
           if (repository.cancelLive) repository.cancelLive(descriptor);
         }
-        setState((cur) => ({
-          ...cur,
-          screen: 'newgame',
-          gameActive: false,
-          gameFinal: false,
-          liveTab: 'entry',
-          half: 'top',
-          inning: 1,
-          outs: 0,
-          bases: [null, null, null],
-          score: { home: 0, away: 0 },
-          kiHome: 0,
-          kiAway: 0,
-          gameStats: {},
-          events: [],
-          undoStack: [],
-          tape: [],
-          lastPlay: null,
-          bookOff: null,
-          selRunner: null,
-          posMenu: null,
-          confirmFinal: false,
-          confirmCancelGame: false,
-          gameClientId: null,
-          gameStartedAt: null,
-          gameOpponentTeamId: null,
-          gameHome: true,
-          gameFixture: null,
-          gameLog: [],
-          serverLog: [],
-          liveGameId: null,
-          liveConnected: false,
-          finalPrompted: false,
-          liveMismatch: null,
-        }));
+        setState((cur) => withoutGame(cur, 'newgame'));
+      },
+
+      askAbandonGame: () => patch({ confirmAbandon: true }),
+      dismissAbandonGame: () => patch({ confirmAbandon: false }),
+
+      /**
+       * Abandon the game this phone is in, because it stopped.
+       *
+       * Not the same as cancelling it. Cancel is the scorer throwing away a game
+       * they are scoring, and goes through the queue like any play. This is a
+       * decision about a game that went quiet — this phone's scorer walked away,
+       * or the one it joined did — made against the last play this phone knows
+       * of. So it goes straight to the account, and the account refuses it if a
+       * play has landed since: the rain delay may have ended a moment ago on
+       * the other phone.
+       */
+      abandonThisGame: async () => {
+        const s = stateRef.current;
+        if (!s.liveGameId || !repository.abandonLiveGame || s.abandoning) return;
+        patch({ abandoning: true });
+        const seen = s.serverLog.reduce((m, e) => Math.max(m, e.seq || 0), 0);
+        try {
+          await repository.abandonLiveGame(s.liveGameId, seen);
+        } catch (err) {
+          patch({ abandoning: false, confirmAbandon: false });
+          toast(abandonFailure(err), 3600);
+          return;
+        }
+        setState((cur) => ({ ...withoutGame(cur, 'league'), abandoning: false }));
+        toast('Game abandoned · every play in it is kept', 3000);
+      },
+
+      openStoppedGame: () => patch({ stoppedSheet: true }),
+      closeStoppedGame: () => patch({ stoppedSheet: false }),
+
+      /** Abandon the stopped game the join card is showing, from outside it. */
+      abandonStoppedGame: async () => {
+        const found = stateRef.current.joinable;
+        if (!found || !repository.abandonLiveGame || stateRef.current.abandoning) return;
+        patch({ abandoning: true });
+        try {
+          await repository.abandonLiveGame(found.gameId, found.lastSeq || 0);
+        } catch (err) {
+          patch({ abandoning: false, stoppedSheet: false });
+          toast(abandonFailure(err), 3600);
+          return;
+        }
+        patch({ abandoning: false, stoppedSheet: false, joinable: null });
+        toast('Game abandoned · every play in it is kept', 3000);
+        // Another game may have been behind it.
+        try {
+          const next = repository.findLiveGame ? await repository.findLiveGame() : null;
+          setState((cur) => (cur.gameActive ? cur : { ...cur, joinable: next || null }));
+        } catch {
+          /* the regular look will find it */
+        }
       },
 
       // Finalizing

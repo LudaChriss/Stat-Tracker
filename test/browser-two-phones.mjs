@@ -53,12 +53,36 @@ const differ = (label, a, b) => {
     console.log(`FAIL ${label} — they agreed, so the check proves nothing\n  both: ${JSON.stringify(a)}`);
   }
 };
+// Stopping early used to leave this run's private browser contexts open, and
+// enough of those start killing CDP sessions in later runs for reasons that
+// have nothing to do with the app. need() now throws; the handler below closes
+// every context this run opened, then exits 2. `contexts` and `raw` are
+// declared further down, so a need() that fails in the preflight — before any
+// phone exists — has nothing to close and says so by catching the lookup.
+class NeedError extends Error {}
 const need = (what, cond, detail) => {
   if (!cond) {
     console.log(`\nCANNOT RUN: ${what}${detail ? '\n  ' + detail : ''}`);
-    process.exit(2);
+    throw new NeedError(what);
   }
 };
+process.on('uncaughtException', async (err) => {
+  const planned = err instanceof NeedError;
+  if (!planned) console.log('\nCRASHED: ' + (err && err.stack ? err.stack : err));
+  try {
+    for (const browserContextId of contexts) {
+      try {
+        await raw('Target.disposeBrowserContext', { browserContextId });
+      } catch {
+        /* already gone */
+      }
+    }
+    ws.close();
+  } catch {
+    /* stopped before any phone was opened */
+  }
+  process.exit(planned ? 2 : 1);
+});
 
 // ---- the stack ---------------------------------------------------------------
 let st;
@@ -283,6 +307,26 @@ const boot = async (p, authKey, authValue, extra = {}) => {
   for (const [k, v] of Object.entries(extra)) await p.put(k, v);
   await p.reload();
 };
+
+// Keep a hand on phone A's realtime sockets, so the mismatch section can drop
+// its live connection the way a bad signal would. Only records them — nothing
+// about how a socket behaves changes — and only realtime's, so Vite's own
+// reload socket is never touched.
+await A.send('Page.addScriptToEvaluateOnNewDocument', {
+  source: `(() => {
+    const Native = window.WebSocket;
+    const realtime = [];
+    window.__realtimeSockets = realtime;
+    function Tracked(url, protocols) {
+      const s = protocols === undefined ? new Native(url) : new Native(url, protocols);
+      if (String(url).includes('/realtime/')) realtime.push(s);
+      return s;
+    }
+    Tracked.prototype = Native.prototype;
+    Object.assign(Tracked, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+    window.WebSocket = Tracked;
+  })();`,
+});
 
 await boot(A, alice.authKey, alice.authValue, {
   'score-tracker:state': JSON.stringify({ version: 3, state: { ...seeded, history: [] } }),
@@ -528,6 +572,88 @@ if (fromServer && converged) {
   eq('the score both phones show is the one the log says', converged.score, fromServer.score);
   eq('and so is every stat line', converged.gameStats, fromServer.gameStats);
   eq('and the scorebook, play for play', converged.events, fromServer.events);
+}
+
+// =============================================================================
+console.log('\n--- A calls the game without B\'s last play: refused, on screen ---');
+// =============================================================================
+//
+// The mismatch sheet had never been on a screen. It appears only when the box
+// score a phone is about to write disagrees with the account's log, which needs
+// a play the finalising phone has genuinely not seen. So: A stops hearing about
+// B's plays — realtime dropped and not allowed back, and the incremental poll
+// refused — while the whole-log read finalising makes is left alone. B scores.
+// A calls the game.
+{
+  const { VIEWPORTS, MEASURE, CLIPPED } = await import('./viewport-measure.mjs');
+
+  // Refuse realtime coming back and the incremental poll, then close the socket
+  // that is already open. Going offline does not close an open WebSocket, which
+  // is why this reaches for the socket itself.
+  await A.send('Network.setBlockedURLs', { urls: ['*game_events?*seq=gt.*', '*/realtime/v1/*'] });
+  eq('A: its realtime sockets closed', await A.js(`(window.__realtimeSockets || []).map((s) => (s.close(), 'closed')).length > 0 ? 'OK' : 'NONE'`), 'OK');
+  ok('A has lost its live connection',
+    !!(await until(async () => ((await A.state()) || {}).liveConnected === false ? 1 : null, 20000)));
+
+  const countLog = async () => ((await admin.from('game_events').select('id').eq('game_id', liveGame.id)).data || []).length;
+  const logBefore = await countLog();
+  eq('A holds every play the account has, before', ((await A.state()).serverLog || []).length, logBefore);
+  eq('B: scored a single A will not hear about', await B.tap('Single'), 'OK');
+  ok('it reached the account', !!(await until(async () => ((await countLog()) > logBefore ? 1 : null), 20000)));
+  // Longer than A's poll interval, so a poll that was going to deliver it has had
+  // its chance and been refused.
+  await sleep(7000);
+  eq('A has not heard of it', ((await A.state()).serverLog || []).length, logBefore);
+
+  eq('A: tapped Game completed', await A.tap('Game completed'), 'OK');
+  eq('A: finalized', await A.tap('Finalize & update standings'), 'OK');
+  const sheet = await until(async () => {
+    const text = await A.js(`document.body.textContent.replace(/\\s+/g,' ')`);
+    return text && text.includes('This game was not finalized') ? text : null;
+  }, 25000);
+  ok('A is shown the mismatch sheet', !!sheet,
+    'on screen: ' + String(await A.js(`document.body.textContent.replace(/\\s+/g,' ').slice(0, 300)`)));
+  {
+    const said = ((await A.state()) || {}).liveMismatch || [];
+    ok('naming what differs, in terms of the plays', said.length > 0 && said.every((l) => /plays/.test(l)), JSON.stringify(said));
+  }
+  eq('and the game is still live in the account',
+    ((await admin.from('games').select('status').eq('id', liveGame.id).single()).data || {}).status, 'live');
+  {
+    const log = (await admin.from('game_events').select('kind').eq('game_id', liveGame.id).order('seq')).data || [];
+    eq('the call is in the log — it was appended before the check, as it must be', log[log.length - 1].kind, 'final');
+  }
+
+  // The audit, at every size, with the sheet up.
+  for (const [vp, w, h, dsf] of VIEWPORTS) {
+    await A.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: dsf, mobile: false });
+    await sleep(400);
+    const m = await A.js(MEASURE);
+    const clipped = await A.js(CLIPPED);
+    ok(`mismatch sheet, ${vp}: nothing runs off the side`, m && !m.ERR && m.overflow <= 0 && !m.wide.length, JSON.stringify(m));
+    ok(`mismatch sheet, ${vp}: nothing is clipped inside a scrolling screen`, Array.isArray(clipped) && !clipped.length, JSON.stringify(clipped));
+    ok(`mismatch sheet, ${vp}: every control is big enough to hit`, m && m.smallCount === 0, JSON.stringify(m && m.small));
+  }
+  await A.send('Emulation.setDeviceMetricsOverride', { width: 393, height: 852, deviceScaleFactor: 2, mobile: false });
+
+  await A.send('Network.setBlockedURLs', { urls: [] });
+  eq('A: Keep scoring', await A.tap('Keep scoring'), 'OK');
+
+  // The sheet says the game is still live. Until this was fixed, that call in the
+  // log took BOTH phones out of the game within seconds of A hearing about it,
+  // while the account still had it open — a game nobody was scoring, made by the
+  // screen that said nothing had been lost. Give both phones long enough to hear
+  // about everything, and to ask the account about the call, several times over.
+  const countNow = await countLog();
+  ok('A catches up with the play it missed, and its own call',
+    !!(await until(async () => (((await A.state()) || {}).serverLog || []).length === countNow ? 1 : null, 30000)));
+  await sleep(14000);
+  const aAfter = await A.state();
+  const bAfter = await B.state();
+  eq('A is still in the game', [aAfter.gameActive, aAfter.screen, aAfter.gameClientId], [true, 'live', liveGame.client_id]);
+  eq('and so is B', [bAfter.gameActive, bAfter.gameClientId], [true, liveGame.client_id]);
+  eq('and the account still says live', ((await admin.from('games').select('status').eq('id', liveGame.id).single()).data || {}).status, 'live');
+  eq('and the two phones agree on the score, now including B\'s play', aAfter.score, bAfter.score);
 }
 
 // =============================================================================

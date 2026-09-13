@@ -12,6 +12,8 @@ import {
 import { leagueLeaders, leagueStandings, statLabel } from '../game/leagueTables.js';
 import { initials } from '../game/logic.js';
 import { rateString } from '../game/stats.js';
+import { idleLabel } from '../game/liveness.js';
+import { useNow } from '../game/useNow.js';
 
 // One screen for both halves of a league: the ones you are in, and the one you
 // are looking at. Two screens would mean two places for "which league am I on"
@@ -387,8 +389,40 @@ function FixtureCard({ game: g, teamName, children }) {
   );
 }
 
+/**
+ * Abandon, with the second tap it deserves. It ends the game on every phone, so
+ * the first tap only asks.
+ */
+function AbandonControl({ game, label, confirming, onAsk, onCancel, onConfirm, busy }) {
+  if (!confirming) {
+    return (
+      <button onClick={() => onAsk(game.id)} disabled={busy} style={{ ...secondary, marginTop: 10 }}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <div style={{ marginTop: 10, background: '#FFF8E8', border: `1.5px solid ${C.amberLine}`, borderRadius: 13, padding: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: '#6B4E00', lineHeight: 1.45 }}>
+        This ends it on every phone. Every play stays in the account, but it goes into no history and
+        no standings.
+      </div>
+      <button
+        onClick={() => onConfirm(game.id)}
+        disabled={busy}
+        style={{ ...primary, background: '#B4441F', marginTop: 10 }}
+      >
+        {busy ? 'Abandoning…' : 'Abandon it'}
+      </button>
+      <button onClick={onCancel} disabled={busy} style={{ ...quiet, width: '100%' }}>
+        Keep it
+      </button>
+    </div>
+  );
+}
+
 /** One league: its teams, its fixtures, and what a commissioner can do to them. */
-function LeagueDetail({ leagues, actions, myTeamId, userId, onScoreFixture }) {
+function LeagueDetail({ leagues, actions, myTeamId, userId, teamRole, onScoreFixture }) {
   const { detail, busy, error, code, notice } = leagues;
   const { league, teams, games, role } = detail;
   const lines = detail.lines || [];
@@ -415,7 +449,20 @@ function LeagueDetail({ leagues, actions, myTeamId, userId, onScoreFixture }) {
     return t ? t.name : 'A team';
   };
 
-  const { fixtures, inProgress, played } = bucketLeagueGames(games);
+  // Re-read on a slow tick, so a game crosses into Stopped while the screen is open.
+  const now = useNow();
+  const activity = detail.activity || {};
+  const { fixtures, inProgress, stopped, played, calledOff } = bucketLeagueGames(games, { activity, now });
+  const [confirmAbandonId, setConfirmAbandonId] = useState(null);
+  const [reschedulingId, setReschedulingId] = useState(null);
+  const [rescheduleWhen, setRescheduleWhen] = useState('');
+  // Who the account would let abandon a game: its scorers and managers, and
+  // the commissioner. Shown only to them; a button that is always refused is
+  // worse than no button.
+  const mayAbandon = (g) =>
+    isAdmin ||
+    (['team_manager', 'team_scorer'].includes(teamRole) &&
+      !!myTeamId && (g.home_team_id === myTeamId || g.away_team_id === myTeamId));
   const scorers = detail.scorers || {};
 
   return (
@@ -615,8 +662,65 @@ function LeagueDetail({ leagues, actions, myTeamId, userId, onScoreFixture }) {
                 />
                 {scorerLine(scorers[g.id], { teams, userId })}
               </div>
+              {isAdmin && activity[g.id] && activity[g.id].plays === 0 && (
+                // Started and nothing scored — somebody tapped Score this game
+                // and it rained. A commissioner should not have to wait out the
+                // cutoff to put it back on the calendar. The account still
+                // refuses if a play lands before they tap.
+                <>
+                  <div style={{ ...label, marginTop: 8 }}>Nothing has been scored in it yet.</div>
+                  <AbandonControl
+                    game={g}
+                    label="Call it off"
+                    confirming={confirmAbandonId === g.id}
+                    onAsk={setConfirmAbandonId}
+                    onCancel={() => setConfirmAbandonId(null)}
+                    onConfirm={async (id) => {
+                      await actions.abandon(id);
+                      setConfirmAbandonId(null);
+                    }}
+                    busy={busy}
+                  />
+                </>
+              )}
             </FixtureCard>
           ))}
+        </>
+      )}
+
+      {stopped.length > 0 && (
+        <>
+          <div style={{ height: 14 }} />
+          <Section>Stopped · {stopped.length}</Section>
+          {stopped.map((g) => {
+            const a = activity[g.id] || {};
+            const at = a.lastEventAt != null ? a.lastEventAt : Date.parse(g.updated_at);
+            return (
+              // Still live in the account, but nobody has scored it for longer
+              // than the cutoff. Not in progress, because it is not being played;
+              // left here, rather than hidden, because somebody has to deal with it.
+              <FixtureCard key={g.id} game={g} teamName={teamName}>
+                <div style={{ marginTop: 8, fontSize: 12.5, fontWeight: 800, color: C.muted, overflowWrap: 'anywhere' }}>
+                  No plays for {idleLabel(now - at)}
+                  {a.plays != null && ` · ${a.plays} ${a.plays === 1 ? 'play' : 'plays'} entered`}
+                </div>
+                {mayAbandon(g) && (
+                  <AbandonControl
+                    game={g}
+                    label="Abandon this game"
+                    confirming={confirmAbandonId === g.id}
+                    onAsk={setConfirmAbandonId}
+                    onCancel={() => setConfirmAbandonId(null)}
+                    onConfirm={async (id) => {
+                      await actions.abandon(id);
+                      setConfirmAbandonId(null);
+                    }}
+                    busy={busy}
+                  />
+                )}
+              </FixtureCard>
+            );
+          })}
         </>
       )}
 
@@ -653,6 +757,62 @@ function LeagueDetail({ leagues, actions, myTeamId, userId, onScoreFixture }) {
         <>
           <div style={{ height: 14 }} />
           <Section>Commissioner</Section>
+
+          {calledOff.length > 0 && (
+            <>
+              <div style={{ ...label, margin: '0 2px 8px' }}>
+                Called off · {calledOff.length}. Abandoned or cancelled, with every play kept. Only you
+                see these, until they are back on the schedule.
+              </div>
+              {calledOff.map((g) => (
+                <FixtureCard key={g.id} game={g} teamName={teamName}>
+                  {reschedulingId === g.id ? (
+                    <>
+                      <label style={{ display: 'block', ...label, marginTop: 10 }}>
+                        New date and time
+                        <input
+                          type="datetime-local"
+                          value={rescheduleWhen}
+                          onChange={(e) => setRescheduleWhen(e.target.value)}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            boxSizing: 'border-box',
+                            marginTop: 4,
+                            minHeight: 44,
+                            border: `1.5px solid ${C.stroke}`,
+                            borderRadius: 12,
+                            padding: '8px 10px',
+                            fontSize: 15,
+                            color: C.ink,
+                          }}
+                        />
+                      </label>
+                      <button
+                        onClick={async () => {
+                          await actions.reschedule(g.id, rescheduleWhen || undefined);
+                          setReschedulingId(null);
+                          setRescheduleWhen('');
+                        }}
+                        disabled={busy || !rescheduleWhen}
+                        style={{ ...primary, opacity: busy || !rescheduleWhen ? 0.45 : 1 }}
+                      >
+                        {busy ? 'Scheduling…' : 'Schedule it'}
+                      </button>
+                      <button onClick={() => setReschedulingId(null)} disabled={busy} style={{ ...quiet, width: '100%' }}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={() => setReschedulingId(g.id)} style={{ ...secondary, marginTop: 10 }}>
+                      Put back on the schedule
+                    </button>
+                  )}
+                </FixtureCard>
+              ))}
+              <div style={{ height: 6 }} />
+            </>
+          )}
 
           {showInvite ? (
             <Card style={{ padding: 14 }}>
@@ -758,6 +918,21 @@ function LeagueDetail({ leagues, actions, myTeamId, userId, onScoreFixture }) {
               Schedule a game
             </button>
           )}
+
+          {/* Who can see it. Row-level security enforces the answer; this is
+              the first place the app has ever let anybody choose it. */}
+          <div style={{ ...label, margin: '14px 2px 0' }}>
+            {league.visibility === 'private'
+              ? 'Private: only people in the league can see its table, schedule and box scores.'
+              : 'Public: anyone can see its table, schedule and box scores, without signing in.'}
+          </div>
+          <button
+            onClick={() => actions.setVisibility(league.visibility === 'private' ? 'public' : 'private')}
+            disabled={busy}
+            style={{ ...secondary, marginTop: 8 }}
+          >
+            {league.visibility === 'private' ? 'Make this league public' : 'Make this league private'}
+          </button>
         </>
       )}
     </div>
@@ -794,6 +969,7 @@ export default function Leagues({ v, actions }) {
           actions={la}
           myTeamId={v.account.teamId}
           userId={v.account.userId}
+          teamRole={v.account.role}
           onScoreFixture={actions.startFixture}
         />
       ) : (

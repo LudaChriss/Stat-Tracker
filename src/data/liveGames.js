@@ -11,7 +11,48 @@
 // Nothing here decides game state. It moves events and hands them back in the
 // server's order; game/events.js is what folds them.
 
+import { now } from '../game/clock.js';
+import { UNDOABLE } from '../game/events.js';
+import { isStale, toMs } from '../game/liveness.js';
+
 const GAME_ID_KEY = 'score-tracker:liveGameIds';
+
+// How many live games a team's offer looks through. More than one because a
+// game nobody finished can sit in front of the one that is actually being
+// scored; not unbounded because a list that long is a problem to fix, not to
+// page through.
+const LIVE_LOOKUP_LIMIT = 10;
+
+/**
+ * How recently each game's log moved, and whether anything was ever scored in
+ * it — without reading the logs.
+ *
+ * Two small reads per game: its newest event, and a count of its plays. A game
+ * in progress on a league screen or behind a join offer is one or two games,
+ * not dozens, and a whole log can be hundreds of rows. Row-level security
+ * decides what is readable; a game whose events cannot be read comes back with
+ * nulls, which is never called stale.
+ *
+ * @returns {Promise<Object<string, {lastSeq: number, lastEventAt: number|null, plays: number}>>}
+ */
+export async function readActivity(client, gameIds) {
+  const out = {};
+  await Promise.all(
+    (gameIds || []).map(async (id) => {
+      const [newest, plays] = await Promise.all([
+        client.from('game_events').select('seq, created_at').eq('game_id', id).order('seq', { ascending: false }).limit(1),
+        client.from('game_events').select('id', { count: 'exact', head: true }).eq('game_id', id).in('kind', [...UNDOABLE]),
+      ]);
+      const row = !newest.error && newest.data ? newest.data[0] : null;
+      out[id] = {
+        lastSeq: row ? Number(row.seq) : 0,
+        lastEventAt: row ? toMs(row.created_at) : null,
+        plays: plays.error ? null : plays.count || 0,
+      };
+    }),
+  );
+  return out;
+}
 
 /** Remember which backend game a client-side game id resolved to. */
 function readIds() {
@@ -138,10 +179,25 @@ export function createLiveGames(client, { getTeamId }) {
       .eq('status', 'live')
       .or(`home_team_id.eq.${id},away_team_id.eq.${id}`)
       .order('scheduled_at', { ascending: false })
-      .limit(1);
+      .limit(LIVE_LOOKUP_LIMIT);
     if (error) throw error;
-    const row = (data || [])[0];
-    if (!row) return null;
+    const rows = data || [];
+    if (!rows.length) return null;
+
+    // A game somebody walked away from must not hide the one being scored now.
+    // The freshest live game wins; a stopped one is only offered when there is
+    // nothing else, and is offered AS stopped.
+    const activity = await readActivity(client, rows.map((r) => r.id));
+    const at = (r) => {
+      const a = activity[r.id] || {};
+      return a.lastEventAt != null ? a.lastEventAt : toMs(r.updated_at);
+    };
+    const clock = now();
+    const ranked = rows
+      .map((r) => ({ r, at: at(r) }))
+      .sort((x, y) => (isStale(x.at, clock) - isStale(y.at, clock)) || ((y.at || 0) - (x.at || 0)));
+    const row = ranked[0].r;
+    const act = activity[row.id] || {};
     resolved.set(row.client_id, row.id);
     rememberId(row.client_id, row.id);
     return {
@@ -156,7 +212,25 @@ export function createLiveGames(client, { getTeamId }) {
       label: row.label,
       date: row.scheduled_at,
       home: row.home_team_id === id,
+      // What the offer needs to tell a game being scored from one that stopped,
+      // and what abandoning it has to say it saw.
+      lastActivityAt: ranked[0].at,
+      lastSeq: act.lastSeq || 0,
+      plays: act.plays == null ? null : act.plays,
     };
+  }
+
+  /**
+   * End a game that has stopped, on behalf of whoever walked away from it.
+   *
+   * Not queued: it is a decision about a game this phone is looking at now,
+   * against what it saw. If it cannot reach the account, the person is told and
+   * the game is left as it was. `seenSeq` is the last play this phone knew of;
+   * the account refuses if anything arrived after it.
+   */
+  async function abandonGame(gameId, seenSeq) {
+    const { error } = await client.rpc('abandon_live_game', { p_game_id: gameId, p_seen_seq: seenSeq || 0 });
+    if (error) throw error;
   }
 
   /**
@@ -200,10 +274,17 @@ export function createLiveGames(client, { getTeamId }) {
     if (error) throw error;
   }
 
+  /** What the account says a game is: scheduled, live, final or cancelled. */
+  async function gameStatus(gameId) {
+    const { data, error } = await client.from('games').select('status').eq('id', gameId).maybeSingle();
+    if (error) throw error;
+    return data ? data.status : null;
+  }
+
   /** The backend id for a client-side game id, if this device knows it. */
   function knownId(clientId) {
     return resolved.get(clientId) || null;
   }
 
-  return { ensureGame, appendNow, fetchEvents, findLiveGame, subscribe, cancelGame, knownId };
+  return { ensureGame, appendNow, fetchEvents, findLiveGame, subscribe, cancelGame, abandonGame, gameStatus, knownId };
 }

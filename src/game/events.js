@@ -160,6 +160,13 @@ const RUNNER_ACTION = { adv: true, out: false, back: 'back' };
 function step(s, event, season) {
   const p = event.payload || {};
 
+  // A call that play carried on after did not stand. The account refused the box
+  // score it was made with — or it would not have accepted this event at all —
+  // so the game is not finalized, whatever the earlier event said.
+  if (s && s.finalized && event.kind !== 'final' && event.kind !== 'cancel') {
+    s = { ...s, finalized: false };
+  }
+
   switch (event.kind) {
     case 'start':
       return startingState(season, p);
@@ -168,6 +175,11 @@ function step(s, event, season) {
     // Its state so far is the first thing in its log, so it is not lost and a
     // second phone replaying gets it whole.
     case 'resume':
+      // Only ever the opening event. A resume after the game has started is a
+      // snapshot of one phone's view appended on top of everyone's plays, and
+      // folding it would replace the game with that view. Logs written before
+      // this was guarded can contain one; it counts for nothing.
+      if (s) return s;
       return {
         ...startingState(season, p),
         ...(p.state || {}),
@@ -204,9 +216,19 @@ function step(s, event, season) {
     case 'track_mode':
       return { ...s, trackMode: p.mode === 'ours' ? 'ours' : 'both' };
     case 'cancel':
-      return { ...s, gameActive: false, cancelled: true };
+      // Also how an abandoned game ends (D18): the same event, saying why. A
+      // build that predates abandoning folds it as a cancel, which is correct.
+      return { ...s, gameActive: false, cancelled: true, abandoned: p.reason === 'abandoned' };
     case 'final':
-      return { ...s, gameActive: false, finalized: true };
+      // The game has been CALLED — not finished. The phone that calls it
+      // appends this before it checks its box score against the log, and if
+      // they disagree nothing is written and the game carries on. So a `final`
+      // in the log is a claim, and the game stays active in the fold: whether it
+      // ended is the account's row to say, and a phone leaves a game only when
+      // that row is final (see useGame). Treating the event as the end took
+      // every phone out of a game the account still had open, including the one
+      // being told on screen that the game was still live.
+      return { ...s, finalized: true };
     default:
       return s;
   }
@@ -356,13 +378,21 @@ export function createReplayer() {
   };
 }
 
-/** Whether the log says this game is over, and how. */
+/**
+ * Whether the log says this game is over, and how.
+ *
+ * `final` means the last word in the log is a call. A call is only a claim until
+ * the account writes the game — a refused one is followed by more play, and a
+ * log whose call was followed by play is `live` again. A cancellation is final
+ * in every sense: nothing is accepted after it.
+ */
 export function logStatus(events) {
   let status = 'none';
   for (const e of events || []) {
     if ((e.kind === 'start' || e.kind === 'resume') && status === 'none') status = 'live';
     else if (e.kind === 'cancel') status = 'cancelled';
     else if (e.kind === 'final') status = 'final';
+    else if (status === 'final') status = 'live';
   }
   return status;
 }

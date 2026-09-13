@@ -60,10 +60,55 @@ const ids = (rows) => rows.map((r) => r.id);
 }
 
 {
-  eq('no games, three empty lists', bucketLeagueGames([]), { fixtures: [], inProgress: [], played: [] });
-  eq('null is survivable', bucketLeagueGames(null), { fixtures: [], inProgress: [], played: [] });
-  eq('an unknown status is not guessed into a list',
-    bucketLeagueGames([g('odd', 'postponed')]), { fixtures: [], inProgress: [], played: [] });
+  const EMPTY = { fixtures: [], inProgress: [], stopped: [], played: [], calledOff: [] };
+  eq('no games, every list empty', bucketLeagueGames([]), EMPTY);
+  eq('null is survivable', bucketLeagueGames(null), EMPTY);
+  eq('an unknown status is not guessed into a list', bucketLeagueGames([g('odd', 'postponed')]), EMPTY);
+}
+
+// ---------------------------------------------------------------------------
+// A live game that stopped is not in progress
+// ---------------------------------------------------------------------------
+{
+  const { STALE_AFTER_MS } = await import('../src/game/liveness.js');
+  const now = Date.parse('2026-09-20T23:00:00Z');
+  const games = [
+    { ...g('fresh', 'live'), updated_at: '2026-09-20T18:00:00Z' },
+    { ...g('quiet', 'live'), updated_at: '2026-09-20T18:00:00Z' },
+    { ...g('edge', 'live'), updated_at: '2026-09-20T18:00:00Z' },
+    { ...g('empty-log', 'live'), updated_at: '2026-09-20T18:00:00Z' },
+    { ...g('unread', 'live'), updated_at: '2026-09-20T18:00:00Z' },
+  ];
+  const activity = {
+    fresh: { lastSeq: 40, lastEventAt: now - 60 * 1000, plays: 39 },
+    quiet: { lastSeq: 12, lastEventAt: now - STALE_AFTER_MS - 60 * 1000, plays: 11 },
+    edge: { lastSeq: 5, lastEventAt: now - STALE_AFTER_MS, plays: 4 },
+    // Started, and the first append never arrived: measured from the row.
+    'empty-log': { lastSeq: 0, lastEventAt: null, plays: 0 },
+    // `unread` has no activity at all — its events could not be read.
+  };
+  const b = bucketLeagueGames(games, { activity, now });
+  eq('a game whose log moved a minute ago is in progress, and so is one exactly at the cutoff, and one nobody could read',
+    ids(b.inProgress), ['fresh', 'edge', 'unread']);
+  eq('one quiet for longer than the cutoff has stopped, and so has one whose first append never came',
+    ids(b.stopped), ['quiet', 'empty-log']);
+  eq('without a time to judge by, nothing is called stopped',
+    [ids(bucketLeagueGames(games, { activity }).stopped), ids(bucketLeagueGames(games).stopped)], [[], []]);
+}
+
+// ---------------------------------------------------------------------------
+// Called off, until it is back on the schedule
+// ---------------------------------------------------------------------------
+{
+  const b = bucketLeagueGames([
+    g('rained-off', 'cancelled'),
+    { ...g('put-back', 'cancelled'), replaced_by: 'its-replacement' },
+    g('its-replacement', 'scheduled'),
+  ]);
+  eq('a cancelled fixture nobody has dealt with is called off', ids(b.calledOff), ['rained-off']);
+  eq('one already put back is not — its replacement is the fixture', ids(b.fixtures), ['its-replacement']);
+  eq('and no cancelled game is in any list everyone reads',
+    [...b.fixtures, ...b.inProgress, ...b.stopped, ...b.played].some((x) => x.status === 'cancelled'), false);
 }
 
 // ---------------------------------------------------------------------------

@@ -124,9 +124,19 @@ export const INITIAL_STATE = {
   liveGameId: null,
   liveConnected: false,
   finalPrompted: false,
+  // Somebody has appended the event that calls this game, and the account has
+  // not yet said whether it stood. A call is not the end of a game until the
+  // row is final.
+  callPending: false,
   liveMismatch: null,
   liveEnded: null,
   joinable: null,
+  // A live game whose log went quiet past the cutoff: its sheet from the join
+  // card, the "abandon this game" confirmation on the game screen, and a flag
+  // while either is waiting on the account.
+  stoppedSheet: false,
+  confirmAbandon: false,
+  abandoning: false,
   bookOff: null,
   posMenu: null,
   opponentPicker: false,

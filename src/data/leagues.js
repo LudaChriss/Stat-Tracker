@@ -10,6 +10,9 @@
 // and a person can belong to several. Folding it into useGame's state would
 // mean the season and the league could disagree about which team you are.
 
+import { readActivity } from './liveGames.js';
+import { isStale, toMs } from '../game/liveness.js';
+
 export const LEAGUE_ROLE_LABEL = {
   league_admin: 'Commissioner',
   viewer: 'Follower',
@@ -112,6 +115,7 @@ export function createLeagues(client, { getUserId = null } = {}) {
       const liveIds = (games.data || []).filter((g) => g.status === 'live').map((g) => g.id);
       let lines = [];
       let starts = [];
+      let activity = {};
       await Promise.all([
         (async () => {
           if (!finalIds.length) return;
@@ -133,6 +137,17 @@ export function createLeagues(client, { getUserId = null } = {}) {
             .order('seq');
           if (!got.error) starts = got.data || [];
         })(),
+        (async () => {
+          // How long since each game in progress last moved, and whether
+          // anything was scored in it: what tells a game being played from one
+          // somebody walked away from. Never the whole log.
+          if (!liveIds.length) return;
+          try {
+            activity = await readActivity(client, liveIds);
+          } catch {
+            activity = {};
+          }
+        })(),
       ]);
 
       return {
@@ -141,6 +156,7 @@ export function createLeagues(client, { getUserId = null } = {}) {
         games: games.data || [],
         lines,
         scorers: scorersByGame(starts),
+        activity,
         error: null,
       };
     },
@@ -192,6 +208,46 @@ export function createLeagues(client, { getUserId = null } = {}) {
       return { error: error || null };
     },
 
+    /**
+     * End a live league game that has stopped — or, for a commissioner, one
+     * nothing has been scored in yet. Refused by the account if a play arrived
+     * after `seenSeq`.
+     */
+    async abandon(gameId, seenSeq) {
+      if (!client) return noBackend;
+      const { error } = await client.rpc('abandon_live_game', { p_game_id: gameId, p_seen_seq: seenSeq || 0 });
+      return { error: error || null };
+    },
+
+    /**
+     * Put a called-off fixture back on the calendar, as a new fixture (D19).
+     * The client id is minted here so a retry lands on the same one.
+     */
+    async reschedule(gameId, { scheduledAt, clientId } = {}) {
+      if (!client) return noBackend;
+      const f = buildFixture({ scheduledAt, clientId });
+      const { data, error } = await client.rpc('reschedule_called_off_game', {
+        p_game_id: gameId,
+        payload: { clientId: f.clientId, scheduledAt: f.scheduledAt, label: f.label },
+      });
+      return { gameId: data || null, error: error || null };
+    },
+
+    /**
+     * Public or private. A commissioner's call, and row-level security's to
+     * enforce: the update is refused for anyone else, and a private league's
+     * games stop being readable by people outside it.
+     */
+    async setVisibility(leagueId, visibility) {
+      if (!client) return noBackend;
+      const { data, error } = await client
+        .from('leagues').update({ visibility }).eq('id', leagueId).select('id');
+      if (!error && !(data || []).length) {
+        return { error: { message: 'Only a league commissioner can change who can see the league.' } };
+      }
+      return { error: error || null };
+    },
+
     /** Take a team back out. Never needs permission — leaving is not a favour. */
     async removeTeam(teamId) {
       if (!client) return noBackend;
@@ -202,23 +258,34 @@ export function createLeagues(client, { getUserId = null } = {}) {
 }
 
 /**
- * A league's games, in the three lists the league screen shows.
+ * A league's games, in the lists the league screen shows.
  *
  * Every status that means something to a person has exactly one home. Until
  * 4e a fixture was either on the schedule or played, so two filters covered
  * it; once "Score this game" flipped a fixture to `live`, it fell out of both
  * and could only be found as a join offer on a phone on one of its teams.
  *
- * `cancelled` is in none of them, deliberately: a cancelled game was not
- * played and is no longer planned, and listing it would invite somebody to
- * wait for it.
+ * A live game is IN PROGRESS only while its log keeps moving. One whose last
+ * play is older than the cutoff is STOPPED: still live in the account, but not
+ * shown as a game being played, because it is not one. Pass `activity` (from
+ * readActivity) and `now` to tell them apart; without them nothing is called
+ * stopped, because not knowing is not evidence.
+ *
+ * A cancelled game is in none of the lists everyone reads: it was not played
+ * and is no longer planned. It is CALLED OFF — a list only a commissioner is
+ * shown — until it has been put back on the schedule (`replaced_by`), after
+ * which the replacement is the fixture and the old row is nobody's business.
  */
-export function bucketLeagueGames(games) {
-  const out = { fixtures: [], inProgress: [], played: [] };
+export function bucketLeagueGames(games, { activity = {}, now = null } = {}) {
+  const out = { fixtures: [], inProgress: [], stopped: [], played: [], calledOff: [] };
   for (const g of games || []) {
     if (g.status === 'scheduled') out.fixtures.push(g);
-    else if (g.status === 'live') out.inProgress.push(g);
-    else if (g.status === 'final') out.played.push(g);
+    else if (g.status === 'live') {
+      const a = activity[g.id];
+      const at = a && a.lastEventAt != null ? a.lastEventAt : a ? toMs(g.updated_at) : null;
+      (now != null && isStale(at, now) ? out.stopped : out.inProgress).push(g);
+    } else if (g.status === 'final') out.played.push(g);
+    else if (g.status === 'cancelled' && !g.replaced_by) out.calledOff.push(g);
   }
   return out;
 }
@@ -280,6 +347,10 @@ export function leagueErrorMessage(error) {
   if (/against itself/i.test(raw)) return 'Pick two different teams.';
   if (/not in this league/i.test(raw)) return 'Both teams have to be in this league first.';
   if (/already (final|cancelled|live)/i.test(raw)) return 'That game has already been played, so it cannot be moved.';
+  if (/since you looked/i.test(raw)) return 'Someone has just entered a play in that game, so it was not abandoned.';
+  if (/not called off/i.test(raw)) return 'Only a game that was called off can be put back on the schedule.';
+  if (/already been finalised/i.test(raw)) return 'That game has already been finalized.';
+  if (/not allowed to score/i.test(raw)) return 'Only a manager, scorer or commissioner can abandon a game.';
   if (/network|fetch|offline/i.test(raw)) return 'Could not reach the server. Check your connection.';
   return raw;
 }

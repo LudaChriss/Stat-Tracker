@@ -4,7 +4,15 @@ import App from './App.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import ConfigError from './components/ConfigError.jsx';
 import { backendConfigError } from './data/supabaseClient.js';
+import { advanceClock, now, resetClock } from './game/clock.js';
 import './styles.css';
+
+// The browser harnesses move time forward to test the stale-game cutoff rather
+// than waiting three hours for it. Development only: a production build has no
+// way to reach this.
+if (import.meta.env.DEV) {
+  window.__scoreTrackerClock = { advance: advanceClock, reset: resetClock, now };
+}
 
 // Register the offline shell. Dev is excluded so Vite's HMR assets are never
 // cached out from under a reload.

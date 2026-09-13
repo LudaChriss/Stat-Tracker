@@ -38,12 +38,36 @@ const ok = (label, cond, detail) => {
     console.log(`FAIL ${label}${detail ? '\n  ' + detail : ''}`);
   }
 };
+// Stopping early used to leave this run's private browser contexts open, and
+// enough of those start killing CDP sessions in later runs for reasons that
+// have nothing to do with the app. need() now throws; the handler below closes
+// every context this run opened, then exits 2. `contexts` and `raw` are
+// declared further down, so a need() that fails in the preflight — before any
+// phone exists — has nothing to close and says so by catching the lookup.
+class NeedError extends Error {}
 const need = (what, cond, detail) => {
   if (!cond) {
     console.log(`\nCANNOT RUN: ${what}${detail ? '\n  ' + detail : ''}`);
-    process.exit(2);
+    throw new NeedError(what);
   }
 };
+process.on('uncaughtException', async (err) => {
+  const planned = err instanceof NeedError;
+  if (!planned) console.log('\nCRASHED: ' + (err && err.stack ? err.stack : err));
+  try {
+    for (const browserContextId of contexts) {
+      try {
+        await raw('Target.disposeBrowserContext', { browserContextId });
+      } catch {
+        /* already gone */
+      }
+    }
+    ws.close();
+  } catch {
+    /* stopped before any phone was opened */
+  }
+  process.exit(planned ? 2 : 1);
+});
 
 // ---- preflight ---------------------------------------------------------------
 let st;
